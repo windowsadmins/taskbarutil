@@ -37,7 +37,7 @@ public class CommandFactory
             description: "Place before this item"
         );
 
-        var addCommand = new Command("add", "Add an item to the taskbar")
+        var addCommand = new Command("--add", "Add an item to the taskbar")
         {
             pathArgument,
             labelOption,
@@ -87,7 +87,7 @@ public class CommandFactory
                 Console.WriteLine($"Successfully added '{path}' to taskbar");
                 if (!noRestart)
                 {
-                    TaskbarManager.RefreshTaskbar();
+                    TaskbarManager.RestartExplorer();
                 }
             }
             else
@@ -109,7 +109,7 @@ public class CommandFactory
             description: "Item to remove from taskbar (name, path, or 'all')"
         );
 
-        var removeCommand = new Command("remove", "Remove an item from the taskbar")
+        var removeCommand = new Command("--remove", "Remove an item from the taskbar")
         {
             itemArgument
         };
@@ -152,7 +152,7 @@ public class CommandFactory
 
             if (success && !noRestart)
             {
-                TaskbarManager.RefreshTaskbar();
+                TaskbarManager.RestartExplorer();
             }
 
             if (!success)
@@ -167,7 +167,7 @@ public class CommandFactory
 
     public Command CreateListCommand()
     {
-        var listCommand = new Command("list", "List all items in the taskbar");
+        var listCommand = new Command("--list", "List all items in the taskbar");
 
         listCommand.SetHandler((bool verbose) =>
         {
@@ -189,7 +189,7 @@ public class CommandFactory
             description: "Item to find in the taskbar"
         );
 
-        var findCommand = new Command("find", "Find an item in the taskbar")
+        var findCommand = new Command("--find", "Find an item in the taskbar")
         {
             itemArgument
         };
@@ -239,7 +239,7 @@ public class CommandFactory
             description: "Place before this item"
         );
 
-        var moveCommand = new Command("move", "Move an item in the taskbar")
+        var moveCommand = new Command("--move", "Move an item in the taskbar")
         {
             itemArgument,
             positionOption,

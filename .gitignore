@@ -53,3 +53,16 @@ Thumbs.db
 *.exe
 *.dll
 *.pdb
+
+# Certificate files
+*.pfx
+*.p12
+*.cer
+*.crt
+
+# Test files
+test-*
+TestApp/
+
+# Publish output
+publish/
