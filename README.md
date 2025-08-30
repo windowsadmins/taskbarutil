@@ -9,17 +9,27 @@ A command line utility for managing Windows taskbar pins, inspired by macOS [doc
 - **List** - Display all pinned items
 - **Find** - Search for specific pinned items
 - **Move** - Reorder taskbar items (limited support due to Windows restrictions)
+- **Code Signing Support** - Build script supports digital signatures for enterprise environments
+- **Automated Build System** - PowerShell build script with CI/CD support
+- **Windows 11 Support** - Dedicated Windows 11 taskbar management
 
 ## Installation
 
-### From Releases
-Download the latest release from the [releases page](https://github.com/windowsadmins/taskbarutil/releases).
+### Option 1: Download Binary (Recommended)
+Download the latest executable from the [releases page](https://github.com/windowsadmins/taskbarutil/releases).
 
-### From Source
+### Option 2: Build from Source
 ```powershell
 git clone https://github.com/windowsadmins/taskbarutil.git
 cd taskbarutil
-dotnet build -c Release
+.\build.ps1 -Clean
+```
+
+### Option 3: Enterprise Build with Code Signing
+For enterprise environments with code signing certificates:
+```powershell
+# Configure your certificate first, then build with signing
+.\build.ps1 -Sign -Clean
 ```
 
 ## Usage

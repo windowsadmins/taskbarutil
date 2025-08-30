@@ -14,7 +14,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Enterprise Certificate Configuration
-$Global:EnterpriseCertCN = 'EmilyCarrU Intune Windows Enterprise Certificate'
+# Update this value with your certificate's Common Name
+$Global:EnterpriseCertCN = 'Your Enterprise Certificate Common Name'
 
 Write-Host "=== TaskbarUtil Build Script ===" -ForegroundColor Magenta
 Write-Host "Architecture: $Architecture" -ForegroundColor Yellow
