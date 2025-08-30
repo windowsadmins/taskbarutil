@@ -8,6 +8,7 @@ namespace TaskbarUtil.Core;
 public class TaskbarManager
 {
     private static bool _verbose = false;
+    private static readonly Windows11TaskbarManager _windows11Manager = new();
     
     // Registry paths for taskbar pins
     private const string TaskbarPinsRegPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband";
@@ -45,6 +46,22 @@ public class TaskbarManager
         }
     }
 
+    private static bool IsWindows11OrLater()
+    {
+        try
+        {
+            var os = Environment.OSVersion;
+            // Windows 11 is version 10.0 with build >= 22000
+            return os.Platform == PlatformID.Win32NT && 
+                   os.Version.Major >= 10 && 
+                   os.Version.Build >= 22000;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static void RefreshTaskbar()
     {
         LogVerbose("Refreshing taskbar...");
@@ -53,21 +70,24 @@ public class TaskbarManager
 
     public static void RestartExplorer()
     {
+        Console.WriteLine("Restarting Windows Explorer...");
         LogVerbose("Restarting Windows Explorer...");
+        
         try
         {
-            // Kill explorer
-            var explorerProcesses = Process.GetProcessesByName("explorer");
-            foreach (var process in explorerProcesses)
+            // Kill explorer processes
+            var processes = Process.GetProcessesByName("explorer");
+            foreach (var process in processes)
             {
                 process.Kill();
                 process.WaitForExit();
             }
 
             // Start explorer again
-            Thread.Sleep(1000);
             Process.Start("explorer.exe");
-            LogVerbose("Explorer restarted successfully");
+            
+            // Wait a moment for it to start
+            Thread.Sleep(2000);
         }
         catch (Exception ex)
         {
@@ -82,9 +102,30 @@ public class TaskbarManager
         
         try
         {
-            // Try multiple methods to get pinned items
-            items.AddRange(GetPinnedItemsFromRegistry());
-            items.AddRange(GetPinnedItemsFromToolbarData());
+            if (IsWindows11OrLater())
+            {
+                // Use Windows 11 method
+                var task = _windows11Manager.ListPinnedApplicationsAsync();
+                task.Wait();
+                var paths = task.Result;
+                
+                foreach (var path in paths)
+                {
+                    items.Add(new TaskbarItem
+                    {
+                        Name = Path.GetFileNameWithoutExtension(path),
+                        Path = path,
+                        Type = GetItemType(path),
+                        Position = items.Count
+                    });
+                }
+            }
+            else
+            {
+                // Fallback to legacy methods
+                items.AddRange(GetPinnedItemsFromRegistry());
+                items.AddRange(GetPinnedItemsFromToolbarData());
+            }
             
             LogVerbose($"Found {items.Count} pinned items");
         }
@@ -234,28 +275,102 @@ public class TaskbarManager
                 return true;
             }
 
-            // Create shortcut in taskbar folder
-            var taskbarPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-            );
-
-            if (!Directory.Exists(taskbarPath))
+            if (IsWindows11OrLater())
             {
-                Directory.CreateDirectory(taskbarPath);
+                // Use modern Windows 11 pinning methods
+                Console.WriteLine("Using modern Windows 11 taskbar pinning methods...");
+                var task = _windows11Manager.PinToTaskbarAsync(resolvedPath);
+                task.Wait(); // Convert async to sync for compatibility
+                return task.Result;
             }
-
-            var shortcutName = Path.GetFileNameWithoutExtension(resolvedPath) + ".lnk";
-            var shortcutPath = Path.Combine(taskbarPath, shortcutName);
-
-            CreateShortcut(shortcutPath, resolvedPath);
-            
-            LogVerbose($"Created shortcut: {shortcutPath}");
-            return true;
+            else
+            {
+                // Use legacy method for older Windows versions
+                return PinToTaskbarUsingShell(resolvedPath);
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error pinning item: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool PinToTaskbarUsingShell(string filePath)
+    {
+        try
+        {
+            // Get the directory and filename
+            var directory = Path.GetDirectoryName(filePath);
+            var filename = Path.GetFileName(filePath);
+
+            // Create Shell Application COM object
+            var shellAppType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellAppType == null)
+            {
+                Console.WriteLine("Could not create Shell.Application COM object");
+                return false;
+            }
+
+            dynamic? shell = Activator.CreateInstance(shellAppType);
+            if (shell == null)
+            {
+                Console.WriteLine("Failed to create Shell.Application instance");
+                return false;
+            }
+
+            // Get the folder object
+            var folder = shell.NameSpace(directory);
+            if (folder == null)
+            {
+                Console.WriteLine($"Could not access directory: {directory}");
+                return false;
+            }
+
+            // Get the file object
+            var file = folder.ParseName(filename);
+            if (file == null)
+            {
+                Console.WriteLine($"Could not find file: {filename}");
+                return false;
+            }
+
+            // Get the context menu verbs
+            var verbs = file.Verbs();
+            if (verbs == null)
+            {
+                Console.WriteLine("Could not get context menu verbs");
+                return false;
+            }
+
+            // Look for "Pin to taskbar" verb
+            for (int i = 0; i < verbs.Count; i++)
+            {
+                var verb = verbs.Item(i);
+                var verbName = verb.Name.Replace("&", "").ToLowerInvariant();
+                
+                Console.WriteLine($"Available verb: '{verbName}' (original: '{verb.Name}')");
+                LogVerbose($"Found verb: {verbName}");
+                
+                // Check for various language versions of "Pin to taskbar"
+                if (verbName.Contains("pin") && verbName.Contains("taskbar") ||
+                    verbName.Contains("pin") && verbName.Contains("task") ||
+                    verbName.Contains("anheften") && verbName.Contains("taskleiste") || // German
+                    verbName.Contains("épingler") && verbName.Contains("barre") || // French
+                    verbName.Contains("anclar") && verbName.Contains("barra")) // Spanish
+                {
+                    LogVerbose($"Executing pin verb: {verb.Name}");
+                    verb.DoIt();
+                    return true;
+                }
+            }
+
+            Console.WriteLine("Pin to taskbar option not found in context menu");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error using Shell API to pin: {ex.Message}");
             return false;
         }
     }
@@ -275,31 +390,100 @@ public class TaskbarManager
                 return false;
             }
 
-            // Remove the shortcut
-            var taskbarPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-            );
-
-            var shortcuts = Directory.GetFiles(taskbarPath, "*.lnk");
-            foreach (var shortcut in shortcuts)
+            if (IsWindows11OrLater())
             {
-                var target = GetShortcutTarget(shortcut);
-                if (string.Equals(target, itemToRemove.Path, StringComparison.OrdinalIgnoreCase) ||
-                    Path.GetFileNameWithoutExtension(shortcut).Equals(itemToRemove.Name, StringComparison.OrdinalIgnoreCase))
-                {
-                    File.Delete(shortcut);
-                    LogVerbose($"Deleted shortcut: {shortcut}");
-                    return true;
-                }
+                // Use modern Windows 11 unpinning methods
+                var task = _windows11Manager.UnpinFromTaskbarAsync(itemToRemove.Path);
+                task.Wait();
+                return task.Result;
             }
-
-            Console.WriteLine($"Could not find shortcut for: {itemIdentifier}");
-            return false;
+            else
+            {
+                // Use proper Windows 10 Shell API to unpin from taskbar
+                return UnpinFromTaskbarUsingShell(itemToRemove.Path);
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error unpinning item: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool UnpinFromTaskbarUsingShell(string filePath)
+    {
+        try
+        {
+            // Get the directory and filename
+            var directory = Path.GetDirectoryName(filePath);
+            var filename = Path.GetFileName(filePath);
+
+            // Create Shell Application COM object
+            var shellAppType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellAppType == null)
+            {
+                Console.WriteLine("Could not create Shell.Application COM object");
+                return false;
+            }
+
+            dynamic? shell = Activator.CreateInstance(shellAppType);
+            if (shell == null)
+            {
+                Console.WriteLine("Failed to create Shell.Application instance");
+                return false;
+            }
+
+            // Get the folder object
+            var folder = shell.NameSpace(directory);
+            if (folder == null)
+            {
+                Console.WriteLine($"Could not access directory: {directory}");
+                return false;
+            }
+
+            // Get the file object
+            var file = folder.ParseName(filename);
+            if (file == null)
+            {
+                Console.WriteLine($"Could not find file: {filename}");
+                return false;
+            }
+
+            // Get the context menu verbs
+            var verbs = file.Verbs();
+            if (verbs == null)
+            {
+                Console.WriteLine("Could not get context menu verbs");
+                return false;
+            }
+
+            // Look for "Unpin from taskbar" verb
+            for (int i = 0; i < verbs.Count; i++)
+            {
+                var verb = verbs.Item(i);
+                var verbName = verb.Name.Replace("&", "").ToLowerInvariant();
+                
+                LogVerbose($"Found verb: {verbName}");
+                
+                // Check for various language versions of "Unpin from taskbar"
+                if (verbName.Contains("unpin") && verbName.Contains("taskbar") ||
+                    verbName.Contains("unpin") && verbName.Contains("task") ||
+                    verbName.Contains("lösen") && verbName.Contains("taskleiste") || // German
+                    verbName.Contains("détacher") && verbName.Contains("barre") || // French
+                    verbName.Contains("desanclar") && verbName.Contains("barra")) // Spanish
+                {
+                    LogVerbose($"Executing unpin verb: {verb.Name}");
+                    verb.DoIt();
+                    return true;
+                }
+            }
+
+            Console.WriteLine("Unpin from taskbar option not found in context menu");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error using Shell API to unpin: {ex.Message}");
             return false;
         }
     }

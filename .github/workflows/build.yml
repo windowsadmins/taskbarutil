@@ -7,17 +7,36 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
 jobs:
   build:
     runs-on: windows-latest
     
+    strategy:
+      matrix:
+        platform: [win-x64, win-x86, win-arm64]
+    
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Get full history for version info
     
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 8.0.x
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
         
     - name: Restore dependencies
       run: dotnet restore
@@ -28,14 +47,46 @@ jobs:
     - name: Test
       run: dotnet test --no-build --verbosity normal --configuration Release --logger trx --results-directory "TestResults"
       
+    - name: Setup Code Signing Certificate
+      if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'win-x64'
+      env:
+        CERTIFICATE_BASE64: ${{ secrets.CODE_SIGNING_CERTIFICATE }}
+        CERTIFICATE_PASSWORD: ${{ secrets.CODE_SIGNING_PASSWORD }}
+      run: |
+        if ($env:CERTIFICATE_BASE64) {
+          $cert = [Convert]::FromBase64String($env:CERTIFICATE_BASE64)
+          $certPath = "$env:TEMP\certificate.p12"
+          [IO.File]::WriteAllBytes($certPath, $cert)
+          
+          Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:CERTIFICATE_PASSWORD -AsPlainText -Force)
+          Remove-Item $certPath
+          
+          # Export thumbprint for signing
+          $thumbprint = (Get-PfxCertificate -FilePath $certPath).Thumbprint
+          echo "CODE_SIGNING_CERT_THUMBPRINT=$thumbprint" >> $env:GITHUB_ENV
+        }
+      shell: pwsh
+      
     - name: Publish
-      run: dotnet publish src/TaskbarUtil.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish
+      run: |
+        $platform = "${{ matrix.platform }}"
+        $signFlag = if ("${{ startsWith(github.ref, 'refs/tags/v') }}" -eq "true" -and $platform -eq "win-x64") { "-Sign" } else { "" }
+        
+        .\build.ps1 -Platform $platform -Package $signFlag -Version ${{ github.ref_name || 'dev' }}
+      shell: pwsh
       
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: taskbarutil-win-x64
-        path: ./publish
+        name: taskbarutil-${{ matrix.platform }}
+        path: artifacts/publish-${{ matrix.platform }}
+        
+    - name: Upload packages
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: actions/upload-artifact@v4
+      with:
+        name: packages-${{ matrix.platform }}
+        path: artifacts/*.zip
 
   release:
     needs: build
@@ -45,24 +96,46 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
       with:
-        dotnet-version: 8.0.x
-        
-    - name: Publish
-      run: dotnet publish src/TaskbarUtil.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish
-      
-    - name: Create ZIP package
-      run: |
-        Compress-Archive -Path ./publish/* -DestinationPath taskbarutil-${{ github.ref_name }}-win-x64.zip
+        path: artifacts
         
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: taskbarutil-${{ github.ref_name }}-win-x64.zip
+        files: artifacts/packages-*/*.zip
         draft: false
-        prerelease: false
+        prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
         generate_release_notes: true
+        body: |
+          ## TaskbarUtil ${{ github.ref_name }}
+          
+          A Windows command-line utility for managing taskbar pins, inspired by macOS dockutil.
+          
+          ### Downloads
+          - **win-x64**: For 64-bit Intel/AMD Windows systems (recommended)
+          - **win-x86**: For 32-bit Windows systems
+          - **win-arm64**: For ARM64 Windows systems (Surface Pro X, etc.)
+          
+          ### Installation
+          1. Download the appropriate ZIP file for your system
+          2. Extract to a folder (e.g., `C:\Program Files\TaskbarUtil`)
+          3. Add the folder to your PATH environment variable
+          4. Run `taskbarutil --help` to get started
+          
+          ### Quick Start
+          ```powershell
+          # Pin Notepad to taskbar
+          taskbarutil add "notepad.exe"
+          
+          # List all pinned items
+          taskbarutil list
+          
+          # Remove an item
+          taskbarutil remove "Notepad"
+          ```
+          
+          See the [README](https://github.com/windowsadmins/taskbarutil/blob/main/README.md) for complete documentation.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
