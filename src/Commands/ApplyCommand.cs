@@ -8,13 +8,15 @@ public static class ApplyCommand
     public static Command Create(Option<bool> verboseOption, Option<bool> dryRunOption)
     {
         var noRestartOption = new Option<bool>("--no-restart", "Do not restart explorer after applying");
+        var allHomesOption = new Option<bool>("--allhomes", "Apply to all user profiles on this machine");
 
         var command = new Command("apply", "Apply the layout config via local policy")
         {
-            noRestartOption
+            noRestartOption,
+            allHomesOption
         };
 
-        command.SetHandler((noRestart, verbose, dryRun) =>
+        command.SetHandler((noRestart, allHomes, verbose, dryRun) =>
         {
             var configPath = EnvironmentInfo.ConfigFilePath;
 
@@ -47,10 +49,18 @@ public static class ApplyCommand
             }
 
             // Step 1: Deploy layout XML via policy registry keys
-            var policyResult = PolicyManager.Apply(configPath, verbose);
-            Console.WriteLine($"Policy set via {policyResult.Method}.");
-            if (policyResult.Message != null)
-                Console.WriteLine($"  {policyResult.Message}");
+            if (allHomes)
+            {
+                var count = PolicyManager.ApplyAllHomes(configPath, verbose);
+                Console.WriteLine($"Policy set for {count} user profile(s).");
+            }
+            else
+            {
+                var policyResult = PolicyManager.Apply(configPath, verbose);
+                Console.WriteLine($"Policy set via {policyResult.Method}.");
+                if (policyResult.Message != null)
+                    Console.WriteLine($"  {policyResult.Message}");
+            }
 
             // Step 2: Restart explorer (deletes start2.bin cache, kills
             // StartMenuExperienceHost, then restarts explorer for live apply)
@@ -66,7 +76,7 @@ public static class ApplyCommand
 
             Console.WriteLine($"Taskbar layout applied with {layout.Pins.Count} pin(s).");
 
-        }, noRestartOption, verboseOption, dryRunOption);
+        }, noRestartOption, allHomesOption, verboseOption, dryRunOption);
 
         return command;
     }
