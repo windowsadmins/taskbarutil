@@ -8,7 +8,17 @@ Windows 11 does not support direct programmatic pinning/unpinning of taskbar ite
 
 TaskbarUtil builds and manages a `LayoutModification.xml` config, then deploys it by setting local policy registry keys under `HKCU\Software\Policies\Microsoft\Windows\Explorer`. No Active Directory or Intune server required -- the policy keys work on standalone machines.
 
-On Windows 11 24H2+ (KB5060829), the policy applies immediately. On earlier builds, a sign-out/sign-in may be required after applying.
+### Live Apply (no logout required)
+
+When you run `taskbarutil apply`, the tool applies changes immediately by:
+
+1. Setting the policy registry keys (`StartLayoutFile` + `LockedStartLayout`)
+2. Killing `StartMenuExperienceHost` and `ShellExperienceHost` (releases cache locks)
+3. Deleting `start2.bin` (pin data cache)
+4. Deleting the `Taskband` registry key (pin order cache)
+5. Restarting `explorer.exe` (rebuilds taskbar from the policy XML)
+
+The taskbar disappears briefly (~5-15 seconds) while explorer reinitializes, then returns with the configured pins in the correct order. Requires elevation to write policy registry keys.
 
 ## Usage
 
@@ -96,10 +106,12 @@ TaskbarUtil stores its config at `%LocalAppData%\TaskbarUtil\LayoutModification.
 
 | Key | Value | Purpose |
 |-----|-------|---------|
-| `HKCU\Software\Policies\Microsoft\Windows\Explorer\StartLayoutFile` | Path to XML | Points to the layout config |
-| `HKCU\Software\Policies\Microsoft\Windows\Explorer\LockedStartLayout` | `1` | Activates the layout policy |
+| `HKCU\...\Explorer\StartLayoutFile` | Path to XML | Points to the layout config |
+| `HKCU\...\Explorer\LockedStartLayout` | `1` | Activates the layout policy |
 
-Running `reset` removes these values and deletes the config file.
+The XML must include `Version="1"` on the `LayoutModificationTemplate` root element -- without it, Windows silently ignores the entire file.
+
+Running `reset` removes these values, clears the caches, and restarts explorer to restore the default taskbar.
 
 ## Supported Apps
 
