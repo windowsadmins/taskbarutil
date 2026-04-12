@@ -46,26 +46,24 @@ public static class ApplyCommand
                 return;
             }
 
-            // Step 1: Deploy layout XML via policy (registry or file copy)
+            // Step 1: Deploy layout XML via policy registry keys
             var policyResult = PolicyManager.Apply(configPath, verbose);
-            Console.WriteLine($"Layout XML deployed via {policyResult.Method}.");
+            Console.WriteLine($"Policy set via {policyResult.Method}.");
             if (policyResult.Message != null)
                 Console.WriteLine($"  {policyResult.Message}");
 
-            // Step 2: Write shortcuts directly to User Pinned folder for immediate effect
-            Console.WriteLine("Writing taskbar shortcuts...");
-            var writerOk = TaskbarWriter.Apply(layout, verbose);
-            if (!writerOk)
-                Console.Error.WriteLine("Warning: Shortcut write had issues. Taskbar may not update fully.");
-
-            // Step 3: Restart explorer
+            // Step 2: Restart explorer (deletes start2.bin cache, kills
+            // StartMenuExperienceHost, then restarts explorer for live apply)
             if (!noRestart)
             {
-                Console.WriteLine("Restarting explorer...");
+                Console.WriteLine("Applying live...");
                 ExplorerHelper.RestartExplorer(verbose);
             }
+            else
+            {
+                Console.WriteLine("Policy set. Sign out and back in to apply.");
+            }
 
-            Console.WriteLine();
             Console.WriteLine($"Taskbar layout applied with {layout.Pins.Count} pin(s).");
 
         }, noRestartOption, verboseOption, dryRunOption);
