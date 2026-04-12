@@ -10,9 +10,15 @@ public enum ApplyMethod
 
 public record ApplyResult(ApplyMethod Method, string TargetPath, bool Success, string? Message = null);
 
+public record UserProfile(string Sid, string ProfilePath, string? UserName);
+
 public static class PolicyManager
 {
     const string PolicyKeyPath = @"Software\Policies\Microsoft\Windows\Explorer";
+    const string ProfileListPath = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
+    const string TaskbandKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband";
+    static readonly string SharedXmlDir = @"C:\ProgramData\TaskbarUtil";
+    static readonly string SharedXmlPath = Path.Combine(SharedXmlDir, "LayoutModification.xml");
 
     static readonly string ShellDirectory =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -141,6 +147,125 @@ public static class PolicyManager
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Apply the taskbar layout to all user profiles on the machine.
+    /// Copies XML to a shared ProgramData location, then sets policy keys
+    /// in each user's HKU hive and clears their caches.
+    /// Requires elevation (admin/SYSTEM).
+    /// </summary>
+    public static int ApplyAllHomes(string xmlFilePath, bool verbose = false)
+    {
+        // Copy XML to shared location so all users reference the same file
+        Directory.CreateDirectory(SharedXmlDir);
+        File.Copy(xmlFilePath, SharedXmlPath, overwrite: true);
+        if (verbose)
+            Console.Error.WriteLine($"  [allhomes] Deployed XML to {SharedXmlPath}");
+
+        var profiles = GetUserProfiles(verbose);
+        int applied = 0;
+
+        foreach (var profile in profiles)
+        {
+            // Check if user's hive is loaded in HKU (only logged-in users)
+            using var hiveCheck = Registry.Users.OpenSubKey(profile.Sid);
+            if (hiveCheck == null)
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"  [allhomes] Skipped {profile.UserName ?? profile.Sid} (not logged in, hive not loaded)");
+                continue;
+            }
+
+            try
+            {
+                using var hku = Registry.Users.CreateSubKey($@"{profile.Sid}\{PolicyKeyPath}");
+                hku.SetValue("StartLayoutFile", SharedXmlPath, RegistryValueKind.ExpandString);
+                hku.SetValue("LockedStartLayout", 1, RegistryValueKind.DWord);
+
+                // Clear start2.bin cache
+                var start2 = Path.Combine(profile.ProfilePath,
+                    @"AppData\Local\Packages\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\LocalState\start2.bin");
+                if (File.Exists(start2))
+                {
+                    try { File.Delete(start2); } catch { }
+                }
+
+                // Clear Taskband registry (pin order cache)
+                try
+                {
+                    Registry.Users.DeleteSubKeyTree($@"{profile.Sid}\{TaskbandKeyPath}", throwOnMissingSubKey: false);
+                }
+                catch { }
+
+                applied++;
+                if (verbose)
+                    Console.Error.WriteLine($"  [allhomes] Applied to {profile.UserName ?? profile.Sid}");
+            }
+            catch (Exception ex)
+            {
+                if (verbose)
+                    Console.Error.WriteLine($"  [allhomes] Failed for {profile.UserName ?? profile.Sid}: {ex.Message}");
+            }
+        }
+
+        // Also deploy to Default profile for new users
+        try
+        {
+            var defaultShell = EnvironmentInfo.DefaultProfileShellPath;
+            Directory.CreateDirectory(defaultShell);
+            File.Copy(xmlFilePath, Path.Combine(defaultShell, "LayoutModification.xml"), overwrite: true);
+            if (verbose)
+                Console.Error.WriteLine($"  [allhomes] Deployed to Default profile for new users");
+        }
+        catch (Exception ex)
+        {
+            if (verbose)
+                Console.Error.WriteLine($"  [allhomes] Could not deploy to Default profile: {ex.Message}");
+        }
+
+        return applied;
+    }
+
+    public static List<UserProfile> GetUserProfiles(bool verbose = false)
+    {
+        var profiles = new List<UserProfile>();
+
+        try
+        {
+            using var profileList = Registry.LocalMachine.OpenSubKey(ProfileListPath);
+            if (profileList == null) return profiles;
+
+            foreach (var sidName in profileList.GetSubKeyNames())
+            {
+                // Skip system SIDs (S-1-5-18, S-1-5-19, S-1-5-20)
+                if (!sidName.StartsWith("S-1-") || sidName is "S-1-5-18" or "S-1-5-19" or "S-1-5-20")
+                    continue;
+
+                using var subKey = profileList.OpenSubKey(sidName);
+                var profilePath = subKey?.GetValue("ProfileImagePath") as string;
+                if (profilePath == null || !Directory.Exists(profilePath))
+                    continue;
+
+                // Try to resolve username from SID
+                string? userName = null;
+                try
+                {
+                    var sid = new System.Security.Principal.SecurityIdentifier(sidName);
+                    userName = sid.Translate(typeof(System.Security.Principal.NTAccount))?.Value;
+                }
+                catch { }
+
+                profiles.Add(new UserProfile(sidName, profilePath, userName));
+            }
+        }
+        catch (Exception ex)
+        {
+            if (verbose)
+                Console.Error.WriteLine($"  [allhomes] Error enumerating profiles: {ex.Message}");
+        }
+
+        return profiles;
     }
 
     static void TryDeleteValue(RegistryKey key, string name, bool verbose)
