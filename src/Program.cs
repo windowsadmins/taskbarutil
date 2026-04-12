@@ -26,6 +26,8 @@ class Program
         rootCommand.AddCommand(FindCommand.Create(verboseOption));
         rootCommand.AddCommand(AddCommand.Create(verboseOption, dryRunOption));
         rootCommand.AddCommand(RemoveCommand.Create(dryRunOption));
+        rootCommand.AddCommand(MoveCommand.Create(dryRunOption));
+        rootCommand.AddCommand(ReplaceCommand.Create(verboseOption, dryRunOption));
         rootCommand.AddCommand(ShowCommand.Create());
         rootCommand.AddCommand(ApplyCommand.Create(verboseOption, dryRunOption));
         rootCommand.AddCommand(ResetCommand.Create(verboseOption, dryRunOption));

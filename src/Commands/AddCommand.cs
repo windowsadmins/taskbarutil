@@ -11,6 +11,8 @@ public static class AddCommand
         var appArg = new Argument<string>("app", "App name, .lnk path, .exe path, or AppUserModelID");
         var positionOption = new Option<int?>("--position", "Position (1-based index)");
         positionOption.AddAlias("-p");
+        var beforeOption = new Option<string?>("--before", "Insert before this app");
+        var afterOption = new Option<string?>("--after", "Insert after this app");
         var uwpOption = new Option<bool>("--uwp", "Treat <app> as a UWP AppUserModelID");
         var appIdOption = new Option<bool>("--app-id", "Treat <app> as a DesktopApplicationID");
 
@@ -18,11 +20,13 @@ public static class AddCommand
         {
             appArg,
             positionOption,
+            beforeOption,
+            afterOption,
             uwpOption,
             appIdOption
         };
 
-        command.SetHandler((app, position, uwp, appId, verbose, dryRun) =>
+        command.SetHandler((app, position, before, after, uwp, appId, verbose, dryRun) =>
         {
             TaskbarPin pin;
 
@@ -67,8 +71,35 @@ public static class AddCommand
                 return;
             }
 
-            // Add at position (convert 1-based to 0-based)
-            int? idx = position.HasValue ? position.Value - 1 : null;
+            // Resolve insertion index from --position, --before, or --after
+            int? idx = null;
+            if (position.HasValue)
+            {
+                idx = position.Value - 1;
+            }
+            else if (before != null)
+            {
+                var target = layout.FindPin(before);
+                if (target == null)
+                {
+                    Console.Error.WriteLine($"Cannot find '{before}' in layout config for --before.");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+                idx = layout.Pins.IndexOf(target);
+            }
+            else if (after != null)
+            {
+                var target = layout.FindPin(after);
+                if (target == null)
+                {
+                    Console.Error.WriteLine($"Cannot find '{after}' in layout config for --after.");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+                idx = layout.Pins.IndexOf(target) + 1;
+            }
+
             layout.AddPin(pin, idx);
 
             if (dryRun)
@@ -89,7 +120,7 @@ public static class AddCommand
             Console.WriteLine($"Added '{pin.DisplayName}' to layout config.");
             Console.WriteLine($"Run 'taskbarutil apply' to deploy the configuration.");
 
-        }, appArg, positionOption, uwpOption, appIdOption, verboseOption, dryRunOption);
+        }, appArg, positionOption, beforeOption, afterOption, uwpOption, appIdOption, verboseOption, dryRunOption);
 
         return command;
     }
