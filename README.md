@@ -1,36 +1,14 @@
 # TaskbarUtil
 
-A command line utility for managing Windows taskbar pins, inspired by macOS [dockutil](https://github.com/kcrawford/dockutil).
+A command-line utility for managing Windows 11 taskbar pins via local policy. Inspired by macOS [dockutil](https://github.com/kcrawford/dockutil).
 
-## Features
+## How It Works
 
-- **Add** - Pin applications, files, folders, and URLs to the taskbar
-- **Remove** - Unpin items from the taskbar
-- **List** - Display all pinned items
-- **Find** - Search for specific pinned items
-- **Move** - Reorder taskbar items (limited support due to Windows restrictions)
-- **Code Signing Support** - Build script supports digital signatures for enterprise environments
-- **Automated Build System** - PowerShell build script with CI/CD support
-- **Windows 11 Support** - Dedicated Windows 11 taskbar management
+Windows 11 does not support direct programmatic pinning/unpinning of taskbar items. Microsoft removed the Shell COM verbs and the registry format is undocumented. The only supported mechanism is **policy-based configuration** via `LayoutModification.xml`.
 
-## Installation
+TaskbarUtil builds and manages a `LayoutModification.xml` config, then deploys it by setting local policy registry keys under `HKCU\Software\Policies\Microsoft\Windows\Explorer`. No Active Directory or Intune server required -- the policy keys work on standalone machines.
 
-### Option 1: Download Binary (Recommended)
-Download the latest executable from the [releases page](https://github.com/windowsadmins/taskbarutil/releases).
-
-### Option 2: Build from Source
-```powershell
-git clone https://github.com/windowsadmins/taskbarutil.git
-cd taskbarutil
-.\build.ps1 -Clean
-```
-
-### Option 3: Enterprise Build with Code Signing
-For enterprise environments with code signing certificates:
-```powershell
-# Configure your certificate first, then build with signing
-.\build.ps1 -Sign -Clean
-```
+On Windows 11 24H2+ (KB5060829), the policy applies immediately. On earlier builds, a sign-out/sign-in may be required after applying.
 
 ## Usage
 
@@ -38,95 +16,101 @@ For enterprise environments with code signing certificates:
 taskbarutil [command] [options]
 
 Commands:
-  add      Add an item to the taskbar
-  remove   Remove an item from the taskbar
-  list     List all items in the taskbar
-  find     Find an item in the taskbar
-  move     Move an item in the taskbar
-  
-Options:
-  --version, -V     Display version information
-  --verbose, -v     Enable verbose output
-  --no-restart     Do not refresh the taskbar after changes
-  --help, -h       Show help information
-```
-
-### Add Command
-
-```
-taskbarutil add <path> [options]
-
-Arguments:
-  path              Path to item to add (application, file, folder, or URL)
+  list          List items currently pinned to the taskbar
+  find <query>  Search for installed apps by name
+  add <app>     Add an app to the taskbar layout config
+  remove <app>  Remove an app from the taskbar layout config
+  show          Display the current layout config (XML)
+  apply         Apply the layout config via local policy
+  reset         Remove policy and restore default taskbar
 
 Options:
-  --label, -l       Custom label for the taskbar item
-  --replacing, -r   Replace an existing item with this label
-  --position, -p    Position: beginning, end, or index number
-  --after, -a       Place after this item
-  --before, -b      Place before this item
-```
-
-### Remove Command
-
-```
-taskbarutil remove <item>
-
-Arguments:
-  item              Item to remove (name, path, or 'all')
+  -v, --verbose   Enable verbose output
+  --dry-run       Show what would be done without making changes
+  --version       Show version information
+  -h, --help      Show help
 ```
 
 ### Examples
 
-Pin Notepad to the taskbar:
 ```powershell
-taskbarutil add "C:\Windows\System32\notepad.exe"
-```
-
-Pin with custom label:
-```powershell
-taskbarutil add "C:\Program Files\Application\app.exe" --label "My App"
-```
-
-Remove an item:
-```powershell
-taskbarutil remove "Notepad"
-```
-
-List all pinned items:
-```powershell
+# See what's currently pinned
 taskbarutil list
+
+# Search for an app
+taskbarutil find chrome
+
+# Build a taskbar layout
+taskbarutil add "Google Chrome"
+taskbarutil add "Windows Terminal"
+taskbarutil add "File Explorer"
+taskbarutil add "Microsoft Edge"
+
+# Preview the config
+taskbarutil show
+
+# Apply it
+taskbarutil apply
+
+# Reset to default
+taskbarutil reset
 ```
 
-Find a specific item:
+### Add Options
+
 ```powershell
-taskbarutil find "Chrome"
+# Add at a specific position (1-based)
+taskbarutil add "Notepad" --position 2
+
+# Add a UWP app by AppUserModelID
+taskbarutil add "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App" --uwp
+
+# Add a desktop app by DesktopApplicationID
+taskbarutil add "Microsoft.Windows.Explorer" --app-id
+
+# Dry run
+taskbarutil add "Chrome" --dry-run
 ```
 
-Remove all items:
+## Requirements
+
+- Windows 11
+- .NET 9.0 Runtime (or use the self-contained build)
+
+## Building
+
 ```powershell
-taskbarutil remove all
+# Build
+dotnet build
+
+# Run tests
+dotnet test
+
+# Build self-contained executable
+.\build.ps1 -Architecture x64
 ```
 
-## Limitations
+## How the Policy Works
 
-- **Move operations**: Windows doesn't provide a reliable API for programmatically reordering taskbar items. Users may need to manually drag items to reorder them.
-- **Windows-only**: This tool only works on Windows systems.
-- **Administrator rights**: Some operations may require administrator privileges depending on the target application location.
+TaskbarUtil stores its config at `%LocalAppData%\TaskbarUtil\LayoutModification.xml` and sets these registry values when you run `apply`:
 
-## System Requirements
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `HKCU\Software\Policies\Microsoft\Windows\Explorer\StartLayoutFile` | Path to XML | Points to the layout config |
+| `HKCU\Software\Policies\Microsoft\Windows\Explorer\LockedStartLayout` | `1` | Activates the layout policy |
 
-- Windows 10/11
-- .NET 8.0 Runtime
+Running `reset` removes these values and deletes the config file.
 
-## Contributing
+## Supported Apps
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+TaskbarUtil has a built-in registry of common apps (Chrome, Edge, Terminal, Explorer, Notepad, Teams, VS Code, etc.) that can be added by friendly name. For other apps, it searches the Start Menu shortcuts and installed AppxPackages.
+
+Three types of pins are supported in the XML:
+
+- **Desktop apps via .lnk path**: `DesktopApplicationLinkPath` pointing to a Start Menu shortcut
+- **Desktop apps via ID**: `DesktopApplicationID` for system apps like File Explorer
+- **UWP/MSIX apps**: `AppUserModelID` for Store/modern apps
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-Inspired by Kyle Crawford's [dockutil](https://github.com/kcrawford/dockutil) for macOS.
+Apache-2.0

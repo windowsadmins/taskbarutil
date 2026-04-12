@@ -274,7 +274,7 @@ try {
     Write-Log "Checking prerequisites..." "INFO"
     
     if (-not (Test-Command "dotnet")) {
-        throw ".NET CLI not found. Please install .NET 8 SDK."
+        throw ".NET CLI not found. Please install .NET 9 SDK."
     }
     
     $dotnetVersion = & dotnet --version

@@ -1,94 +1,48 @@
-# Office Workstation Setup Script
-# This script sets up a typical office workstation taskbar
+# Office Workstation Taskbar Setup
+# Builds a taskbar layout with typical office/productivity apps and applies it
 
 param(
-    [switch]$CleanFirst,
+    [switch]$DryRun,
     [switch]$Verbose
 )
 
-if ($Verbose) {
-    $VerboseFlag = "--verbose"
-} else {
-    $VerboseFlag = ""
-}
+$flags = @()
+if ($DryRun) { $flags += "--dry-run" }
+if ($Verbose) { $flags += "--verbose" }
 
 Write-Host "Setting up office workstation taskbar..." -ForegroundColor Green
 
-# Clean existing pins if requested
-if ($CleanFirst) {
-    Write-Host "Removing all existing taskbar pins..." -ForegroundColor Yellow
-    & taskbarutil remove all $VerboseFlag
+# Reset any existing layout config
+if (-not $DryRun) {
+    & taskbarutil reset --no-restart 2>$null
 }
 
-# Define applications to pin
-$Applications = @(
-    @{
-        Name = "File Explorer"
-        Path = "explorer.exe"
-        Label = "Explorer"
-    },
-    @{
-        Name = "Microsoft Edge"
-        Path = "msedge.exe"
-        Label = "Edge"
-    },
-    @{
-        Name = "Microsoft Outlook"
-        Path = "${env:ProgramFiles}\Microsoft Office\root\Office16\OUTLOOK.EXE"
-        Label = "Outlook"
-    },
-    @{
-        Name = "Microsoft Word"
-        Path = "${env:ProgramFiles}\Microsoft Office\root\Office16\WINWORD.EXE"
-        Label = "Word"
-    },
-    @{
-        Name = "Microsoft Excel"
-        Path = "${env:ProgramFiles}\Microsoft Office\root\Office16\EXCEL.EXE"
-        Label = "Excel"
-    },
-    @{
-        Name = "Microsoft PowerPoint"
-        Path = "${env:ProgramFiles}\Microsoft Office\root\Office16\POWERPNT.EXE"
-        Label = "PowerPoint"
-    },
-    @{
-        Name = "Microsoft Teams"
-        Path = "$env:LOCALAPPDATA\Microsoft\Teams\current\Teams.exe"
-        Label = "Teams"
-    },
-    @{
-        Name = "Adobe Acrobat Reader"
-        Path = "${env:ProgramFiles}\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
-        Label = "Acrobat"
-    },
-    @{
-        Name = "Calculator"
-        Path = "calc.exe"
-        Label = "Calculator"
-    },
-    @{
-        Name = "Notepad"
-        Path = "notepad.exe"
-        Label = "Notepad"
-    }
+# Build the layout
+$apps = @(
+    "File Explorer",
+    "Microsoft Edge",
+    "Outlook",
+    "Microsoft Teams",
+    "Calculator",
+    "Snipping Tool"
 )
 
-# Pin applications
-foreach ($app in $Applications) {
-    if (Test-Path $app.Path -ErrorAction SilentlyContinue) {
-        Write-Host "Pinning: $($app.Name)" -ForegroundColor Cyan
-        & taskbarutil add $app.Path --label $app.Label $VerboseFlag
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  ✓ Successfully pinned $($app.Name)" -ForegroundColor Green
-        } else {
-            Write-Host "  ✗ Failed to pin $($app.Name)" -ForegroundColor Red
-        }
-    } else {
-        Write-Host "  - Skipping $($app.Name) (not found at $($app.Path))" -ForegroundColor Gray
-    }
+foreach ($app in $apps) {
+    Write-Host "  Adding: $app" -ForegroundColor Cyan
+    & taskbarutil add $app @flags
 }
 
-Write-Host "`nOffice workstation setup complete!" -ForegroundColor Green
-Write-Host "Run 'taskbarutil list' to see all pinned applications." -ForegroundColor Cyan
+# Show the result
+Write-Host ""
+Write-Host "Layout config:" -ForegroundColor Green
+& taskbarutil show
+
+# Apply
+if (-not $DryRun) {
+    Write-Host ""
+    Write-Host "Applying layout..." -ForegroundColor Yellow
+    & taskbarutil apply @flags
+}
+
+Write-Host ""
+Write-Host "Done. Run 'taskbarutil list' to see current pinned items." -ForegroundColor Green
