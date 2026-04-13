@@ -116,7 +116,13 @@ public static class SettingsCommand
 
         try
         {
-            using var key = Registry.CurrentUser.CreateSubKey(AdvancedKeyPath);
+            using var key = Registry.CurrentUser.OpenSubKey(AdvancedKeyPath, writable: true);
+            if (key == null)
+            {
+                Console.Error.WriteLine($"Registry key not found: {AdvancedKeyPath}");
+                Environment.ExitCode = 1;
+                return;
+            }
             key.SetValue(setting.RegValue, regVal, RegistryValueKind.DWord);
             var display = setting.Name == "search" ? MapSearchValue(regVal) : (regVal == 0 ? "off" : "on");
             Console.WriteLine($"{setting.Name} = {display}");
