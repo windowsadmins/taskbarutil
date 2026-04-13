@@ -318,10 +318,10 @@ if ($Msi) {
         & $cimipkg --verbose $stagingDir
         if ($LASTEXITCODE -ne 0) { Write-Log "cimipkg MSI build failed for $arch" "ERROR"; exit 1 }
 
-        $msi = Get-ChildItem "$stagingDir\build\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($msi) {
+        $msiFile = Get-ChildItem "$stagingDir\build\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($msiFile) {
             $dest = Join-Path $releaseDir "TaskbarUtil-$arch-$version.msi"
-            Move-Item $msi.FullName $dest -Force
+            Move-Item $msiFile.FullName $dest -Force
             $sizeMB = '{0:N2}' -f ((Get-Item $dest).Length / 1MB)
             Write-Log "MSI created: TaskbarUtil-$arch-$version.msi ($sizeMB MB)" "SUCCESS"
 
