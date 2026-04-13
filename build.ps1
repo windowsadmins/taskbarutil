@@ -90,16 +90,69 @@ function Resolve-SignToolPath {
 
 function Get-SigningCertThumbprint {
     [OutputType([hashtable])]
-    param()
-    foreach ($store in @("CurrentUser", "LocalMachine")) {
-        $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
-            Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) } |
-            Sort-Object NotAfter -Descending |
-            Select-Object -First 1
-        if ($cert) {
-            return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject }
+    param(
+        [string]$Name,
+        [string]$ProvidedThumbprint
+    )
+
+    # Priority 1: Explicit thumbprint (parameter or env var)
+    $tp = if ($ProvidedThumbprint) { $ProvidedThumbprint } else { $env:CERT_THUMBPRINT }
+    if ($tp) {
+        foreach ($store in @("CurrentUser", "LocalMachine")) {
+            $cert = Get-ChildItem "Cert:\$store\My\$tp" -ErrorAction SilentlyContinue
+            if ($cert) { return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject } }
         }
     }
+
+    # Resolve certificate CN: parameter > project env var > generic env var
+    $certCN = if ($Name) { $Name }
+              elseif ($env:TASKBARUTIL_CERT_CN) { $env:TASKBARUTIL_CERT_CN }
+              elseif ($env:ENTERPRISE_CERT_CN) { $env:ENTERPRISE_CERT_CN }
+              else { '' }
+    $certSubject = if ($env:TASKBARUTIL_CERT_SUBJECT) { $env:TASKBARUTIL_CERT_SUBJECT }
+                   elseif ($env:ENTERPRISE_CERT_SUBJECT) { $env:ENTERPRISE_CERT_SUBJECT }
+                   else { '' }
+
+    # Priority 2: Match by CN from parameter or env var
+    if ($certCN) {
+        foreach ($store in @("CurrentUser", "LocalMachine")) {
+            $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
+                Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) -and $_.Subject -like "*$certCN*" } |
+                Sort-Object NotAfter -Descending | Select-Object -First 1
+            if ($cert) { return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject } }
+        }
+    }
+
+    # Priority 3: Match by subject env var
+    if ($certSubject) {
+        foreach ($store in @("CurrentUser", "LocalMachine")) {
+            $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
+                Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) -and $_.Subject -like "*$certSubject*" } |
+                Sort-Object NotAfter -Descending | Select-Object -First 1
+            if ($cert) { return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject } }
+        }
+    }
+
+    # Priority 4: Enterprise keyword matching (Intune/MDM certs may lack Code Signing EKU)
+    $enterpriseKeywords = @("Enterprise", "Intune", "Corporate", "Organization")
+    foreach ($store in @("LocalMachine", "CurrentUser")) {
+        foreach ($kw in $enterpriseKeywords) {
+            $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
+                Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) -and $_.Subject -like "*$kw*" -and $_.Subject -notmatch "\bTest\b" } |
+                Sort-Object NotAfter -Descending | Select-Object -First 1
+            if ($cert) { return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject } }
+        }
+    }
+
+    # Priority 5: Any valid code signing certificate (prefer LocalMachine)
+    $codeSigningOid = '1.3.6.1.5.5.7.3.3'
+    foreach ($store in @("LocalMachine", "CurrentUser")) {
+        $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
+            Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) -and $_.Subject -notmatch "\bTest\b" -and ($_.EnhancedKeyUsageList.ObjectId -contains $codeSigningOid) } |
+            Sort-Object NotAfter -Descending | Select-Object -First 1
+        if ($cert) { return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject } }
+    }
+
     return $null
 }
 
@@ -193,7 +246,7 @@ function Ensure-Cimipkg {
 $autoDetectedCert = $null
 if (-not $Sign -and -not $NoSign) {
     try {
-        $certInfo = Get-SigningCertThumbprint
+        $certInfo = Get-SigningCertThumbprint -Name $CertificateName -ProvidedThumbprint $Thumbprint
         if ($certInfo) {
             $autoDetectedCert = $certInfo
             Write-Log "Auto-detected certificate: $($certInfo.Subject) in $($certInfo.Store) store" "INFO"
@@ -363,10 +416,10 @@ if ($Nupkg) {
         & $cimipkg --nupkg --verbose $stagingDir
         if ($LASTEXITCODE -ne 0) { Write-Log "cimipkg NuGet build failed for $arch" "WARNING"; continue }
 
-        $nupkg = Get-ChildItem "$stagingDir\build\*.nupkg" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($nupkg) {
+        $nupkgFile = Get-ChildItem "$stagingDir\build\*.nupkg" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($nupkgFile) {
             $dest = Join-Path $releaseDir "TaskbarUtil-$arch-$version.nupkg"
-            Move-Item $nupkg.FullName $dest -Force
+            Move-Item $nupkgFile.FullName $dest -Force
             Write-Log "NuGet package created: TaskbarUtil-$arch-$version.nupkg" "SUCCESS"
         } else {
             Write-Log "NuGet output not found for $arch, skipping" "WARNING"
@@ -385,6 +438,26 @@ foreach ($arch in @("x64", "arm64")) {
         $zipPath = Join-Path $releaseDir "taskbarutil-$arch.zip"
         Compress-Archive -Path $exePath -DestinationPath $zipPath -Force
         Write-Log "Created: taskbarutil-$arch.zip" "SUCCESS"
+    }
+}
+
+# --- Clean old releases ---
+
+if (Test-Path $releaseDir) {
+    foreach ($pattern in @("TaskbarUtil-*-*.msi", "TaskbarUtil-*-*.nupkg")) {
+        $files = Get-ChildItem $releaseDir -Filter $pattern | Sort-Object Name -Descending
+        $kept = @{}
+        foreach ($file in $files) {
+            # Group key: everything before the version stamp (e.g. "TaskbarUtil-x64")
+            if ($file.BaseName -match '^(.+)-\d{4}\.\d{2}\.\d{2}\.\d{4}$') {
+                $key = $Matches[1]
+                if ($kept.ContainsKey($key)) {
+                    Remove-Item $file.FullName -Force
+                } else {
+                    $kept[$key] = $true
+                }
+            }
+        }
     }
 }
 

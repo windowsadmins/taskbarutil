@@ -16,6 +16,8 @@
     <RepositoryUrl>https://github.com/windowsadmins/taskbarutil</RepositoryUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- COM interop (WScript.Shell) triggers false-positive trim warnings -->
+    <NoWarn>$(NoWarn);IL2026;IL2072</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
