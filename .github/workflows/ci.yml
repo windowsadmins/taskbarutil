@@ -195,3 +195,19 @@ jobs:
             | `TaskbarUtil-arm64-*.msi` | MSI installer (ARM64) |
             | `taskbarutil-x64.zip` | Standalone binary (x64) |
             | `taskbarutil-arm64.zip` | Standalone binary (ARM64) |
+
+            ---
+
+            ### Signing
+
+            Binaries and MSI packages are provided **unsigned**. For enterprise
+            deployment, sign them with your organization's code signing certificate
+            before distribution to avoid AV/EDR false positives:
+
+            ```powershell
+            # Sign binary
+            signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" taskbarutil.exe
+
+            # Sign MSI package
+            signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" TaskbarUtil-x64-*.msi
+            ```
