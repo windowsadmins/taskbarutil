@@ -1,379 +1,400 @@
 # TaskbarUtil Build Script
-# Builds and optionally signs the TaskbarUtil executable for deployment
+# Builds native Windows binaries and MSI packages via cimipkg
+#
+# Usage:
+#   .\build.ps1                    # Full build: binaries + MSI + NuGet + zip
+#   .\build.ps1 -Sign              # Build and sign with auto-detected cert
+#   .\build.ps1 -NoSign            # Build without signing
+#   .\build.ps1 -Msi               # Build only MSI packages
+#   .\build.ps1 -Nupkg             # Build only NuGet packages
+#   .\build.ps1 -Runtime win-x64   # Build only x64
+#   .\build.ps1 -Configuration Debug
 
-[CmdletBinding()]
 param(
-    [switch]$Sign,
-    [string]$Thumbprint,
-    [ValidateSet("x64", "arm64", "both")]
-    [string]$Architecture = "x64",
-    [switch]$Clean,
-    [switch]$Test
+    [switch]$Build = $false,
+    [switch]$Sign = $false,
+    [switch]$NoSign = $false,
+    [switch]$Msi = $false,
+    [switch]$Nupkg = $false,
+    [switch]$Clean = $false,
+    [switch]$Test = $false,
+    [string]$Configuration = "Release",
+    [string[]]$Runtime = @("win-x64", "win-arm64"),
+    [string]$CertificateName,
+    [string]$Thumbprint
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
-# Enterprise Certificate Configuration
-# Update this value with your certificate's Common Name
-$Global:EnterpriseCertCN = 'Your Enterprise Certificate Common Name'
+# Default: full build when no flags provided
+if (-not ($Build -or $Msi -or $Nupkg -or $Test)) {
+    $Build = $true
+    $Msi = $true
+    $Nupkg = $true
+}
 
-Write-Host "=== TaskbarUtil Build Script ===" -ForegroundColor Magenta
-Write-Host "Architecture: $Architecture" -ForegroundColor Yellow
-Write-Host "Code Signing: $Sign" -ForegroundColor Yellow
-Write-Host "Clean Build: $Clean" -ForegroundColor Yellow
-Write-Host ""
+$rootPath = $PSScriptRoot
+$projectPath = Join-Path $rootPath "src\TaskbarUtil.csproj"
+$distDir = Join-Path $rootPath "dist"
+$releaseDir = Join-Path $rootPath "release"
+$filesToSign = New-Object System.Collections.Generic.List[string]
 
-# Function to display messages with different log levels
+$script:SignToolPath = $null
+$script:SignToolChecked = $false
+$script:SignToolWarned = $false
+
 function Write-Log {
     param (
         [string]$Message,
-        [ValidateSet("INFO", "WARN", "ERROR", "SUCCESS")]
+        [ValidateSet("INFO", "SUCCESS", "WARNING", "ERROR")]
         [string]$Level = "INFO"
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     switch ($Level) {
-        "INFO"    { Write-Host "[$timestamp] [INFO] $Message" -ForegroundColor White }
-        "WARN"    { Write-Host "[$timestamp] [WARN] $Message" -ForegroundColor Yellow }
-        "ERROR"   { Write-Host "[$timestamp] [ERROR] $Message" -ForegroundColor Red }
+        "INFO"    { Write-Host "[$timestamp] [INFO] $Message" -ForegroundColor Cyan }
         "SUCCESS" { Write-Host "[$timestamp] [SUCCESS] $Message" -ForegroundColor Green }
+        "WARNING" { Write-Host "[$timestamp] [WARNING] $Message" -ForegroundColor Yellow }
+        "ERROR"   { Write-Host "[$timestamp] [ERROR] $Message" -ForegroundColor Red }
     }
 }
 
-# Function to check if a command exists
-function Test-Command {
-    param([string]$Command)
-    return [bool](Get-Command $Command -ErrorAction SilentlyContinue)
-}
+function Resolve-SignToolPath {
+    if ($script:SignToolChecked) { return $script:SignToolPath }
+    $script:SignToolChecked = $true
 
-# Function to ensure signtool is available
-function Test-SignTool {
-    $c = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($c) { return }
-    $roots = @(
-        "$env:ProgramFiles\Windows Kits\10\bin",
-        "$env:ProgramFiles(x86)\Windows Kits\10\bin"
-    ) | Where-Object { Test-Path $_ }
+    $commandLookup = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+    if ($commandLookup) { $script:SignToolPath = $commandLookup.Source; return $script:SignToolPath }
 
-    try {
-        $kitsRoot = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -EA Stop).KitsRoot10
-        if ($kitsRoot) { $roots += (Join-Path $kitsRoot 'bin') }
-    } catch {}
-
-    foreach ($root in $roots) {
-        $cand = Get-ChildItem -Path (Join-Path $root '*\x64\signtool.exe') -EA SilentlyContinue |
-                Sort-Object LastWriteTime -Desc | Select-Object -First 1
-        if ($cand) {
-            $env:Path = "$($cand.Directory.FullName);$env:Path"
-            return
+    foreach ($envVar in @("SIGNTOOL_PATH", "SIGNTOOL")) {
+        $value = [Environment]::GetEnvironmentVariable($envVar)
+        if (-not [string]::IsNullOrWhiteSpace($value) -and (Test-Path $value -PathType Leaf)) {
+            $script:SignToolPath = (Resolve-Path $value).Path; return $script:SignToolPath
         }
     }
-    throw "signtool.exe not found. Install Windows 10/11 SDK (Signing Tools)."
-}
 
-# Function to find signing certificate
-function Get-SigningCertificate {
-    param([string]$Thumbprint = $null)
-    
-    if ($Thumbprint) {
-        $cert = Get-ChildItem -Path "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
-        if ($cert) {
-            return $cert
+    $kitRoots = @()
+    if ($env:ProgramFiles) { $kitRoots += Join-Path $env:ProgramFiles "Windows Kits\10\bin" }
+    if (${env:ProgramFiles(x86)}) { $kitRoots += Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin" }
+
+    foreach ($kitRoot in $kitRoots | Where-Object { Test-Path $_ }) {
+        $versions = Get-ChildItem -Path $kitRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+        foreach ($versionDir in $versions) {
+            foreach ($arch in @("x64", "arm64", "x86")) {
+                $exePath = Join-Path $versionDir.FullName "$arch\signtool.exe"
+                if (Test-Path $exePath) { $script:SignToolPath = (Resolve-Path $exePath).Path; return $script:SignToolPath }
+            }
         }
-        Write-Log "Certificate with thumbprint $Thumbprint not found" "WARN"
     }
-    
-    # Search for enterprise certificate by common name
-    $cert = Get-ChildItem -Path "Cert:\CurrentUser\My\" | Where-Object {
-        $_.Subject -like "*$Global:EnterpriseCertCN*"
-    } | Select-Object -First 1
-    
-    if ($cert) {
-        Write-Log "Found enterprise certificate: $($cert.Subject)" "SUCCESS"
-        Write-Log "Thumbprint: $($cert.Thumbprint)" "INFO"
-        
-        return $cert
-    }
-    
-    Write-Log "No suitable signing certificate found" "WARN"
     return $null
 }
 
-# Function to sign executable with robust retry and multiple timestamp servers
-function Invoke-SignArtifact {
+function Get-SigningCertThumbprint {
+    [OutputType([hashtable])]
+    param()
+    foreach ($store in @("CurrentUser", "LocalMachine")) {
+        $cert = Get-ChildItem "Cert:\$store\My" -ErrorAction SilentlyContinue |
+            Where-Object { $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date) } |
+            Sort-Object NotAfter -Descending |
+            Select-Object -First 1
+        if ($cert) {
+            return @{ Thumbprint = $cert.Thumbprint; Store = $store; Subject = $cert.Subject }
+        }
+    }
+    return $null
+}
+
+function Invoke-CodeSign {
     param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Thumbprint,
+        [Parameter(Mandatory)][string]$TargetFile,
+        [string]$CertName,
+        [string]$CertThumbprint,
         [int]$MaxAttempts = 4
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) { throw "File not found: $Path" }
+    $resolvedPath = Resolve-SignToolPath
+    if (-not $resolvedPath) {
+        if (-not $script:SignToolWarned) {
+            Write-Log "Skipping signing: signtool.exe not found. Install Windows SDK or set SIGNTOOL_PATH." "WARNING"
+            $script:SignToolWarned = $true
+        }
+        return $false
+    }
 
-    $tsas = @(
-        'http://timestamp.digicert.com',
-        'http://timestamp.sectigo.com',
-        'http://timestamp.entrust.net/TSS/RFC3161sha2TS'
-    )
+    if (-not (Test-Path $TargetFile)) { Write-Log "File not found for signing: $TargetFile" "WARNING"; return $false }
 
+    $tsas = @('http://timestamp.digicert.com', 'http://timestamp.sectigo.com', 'http://timestamp.entrust.net/TSS/RFC3161sha2TS')
     $attempt = 0
-    while ($attempt -lt $MaxAttempts) {
+    $signed = $false
+
+    while ($attempt -lt $MaxAttempts -and -not $signed) {
         $attempt++
         foreach ($tsa in $tsas) {
-            & signtool.exe sign `
-                /sha1 $Thumbprint `
-                /fd SHA256 `
-                /td SHA256 `
-                /tr $tsa `
-                /v `
-                "$Path"
-            $code = $LASTEXITCODE
+            try {
+                $signArgs = @("sign", "/fd", "SHA256", "/tr", $tsa, "/td", "SHA256")
+                if ($CertThumbprint) { $signArgs += @("/sha1", $CertThumbprint) }
+                elseif ($CertName) { $signArgs += @("/n", $CertName) }
+                else { $signArgs += "/a" }
+                $signArgs += $TargetFile
 
-            if ($code -eq 0) {
-                # Optional append of legacy timestamp for old verifiers; harmless if TSA rejects.
-                & signtool.exe timestamp /t http://timestamp.digicert.com /v "$Path" 2>$null
-                return
-            }
-
-            Start-Sleep -Seconds (4 * $attempt)
+                & $resolvedPath @signArgs 2>&1 | Out-Null
+                if ($LASTEXITCODE -eq 0) { Write-Log "Signed: $TargetFile" "SUCCESS"; $signed = $true; break }
+            } catch {}
+            if (-not $signed) { Start-Sleep -Seconds (2 * $attempt) }
         }
     }
 
-    throw "Signing failed after $MaxAttempts attempts across TSAs: $Path"
+    if (-not $signed) { Write-Log "Failed to sign after $MaxAttempts attempts: $TargetFile" "WARNING" }
+    return $signed
 }
 
-# Function to build for specific architecture
-function Build-Architecture {
-    param(
-        [string]$Arch,
-        [System.Security.Cryptography.X509Certificates.X509Certificate2]$SigningCert = $null
-    )
-    
-    Write-Log "Building for $Arch architecture..." "INFO"
-    
-    $outputDir = "publish\$Arch"
-    
-    if ($Clean -and (Test-Path $outputDir)) {
-        Write-Log "Cleaning output directory: $outputDir" "INFO"
-        Remove-Item -Path $outputDir -Recurse -Force
-    }
-    
-    # Ensure output directory exists
-    if (-not (Test-Path $outputDir)) {
-        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-    }
-    
-    # Build arguments
-    $buildArgs = @(
-        "publish"
-        "src\TaskbarUtil.csproj"
-        "--configuration", "Release"
-        "--runtime", "win-$Arch"
-        "--output", $outputDir
-        "--self-contained", "true"
-        "--verbosity", "minimal"
-    )
-    
+function Find-Cimipkg {
+    # Check PATH
+    $cmd = Get-Command "cimipkg.exe" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    # Check tools directory
+    $local = Join-Path $rootPath "tools\cimipkg.exe"
+    if (Test-Path $local) { return $local }
+
+    # Check Program Files
+    $pf = "C:\Program Files\sbin\cimipkg.exe"
+    if (Test-Path $pf) { return $pf }
+
+    return $null
+}
+
+function Ensure-Cimipkg {
+    $path = Find-Cimipkg
+    if ($path) { return $path }
+
+    Write-Log "cimipkg not found locally. Downloading from GitHub..." "INFO"
+    $toolsDir = Join-Path $rootPath "tools"
+    New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
+
     try {
-        Write-Log "Running: dotnet $($buildArgs -join ' ')" "INFO"
-        & dotnet @buildArgs
-        
-        if ($LASTEXITCODE -ne 0) {
-            throw "dotnet publish failed with exit code: $LASTEXITCODE"
+        & gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir $toolsDir
+        Expand-Archive -Path (Join-Path $toolsDir "cimipkg-win-x64.zip") -DestinationPath $toolsDir -Force
+        Remove-Item (Join-Path $toolsDir "cimipkg-win-x64.zip") -Force -ErrorAction SilentlyContinue
+
+        $downloaded = Join-Path $toolsDir "cimipkg.exe"
+        if (Test-Path $downloaded) {
+            Write-Log "Downloaded cimipkg.exe" "SUCCESS"
+            return $downloaded
         }
-        
-        $executablePath = Join-Path $outputDir "taskbarutil.exe"
-        
-        if (-not (Test-Path $executablePath)) {
-            throw "Expected executable not found: $executablePath"
-        }
-        
-        # Convert to absolute path for signing
-        $executablePath = (Get-Item $executablePath).FullName
-        
-        $fileInfo = Get-Item $executablePath
-        $sizeMB = [math]::Round($fileInfo.Length / 1MB, 2)
-        Write-Log "Build successful: $($fileInfo.Name) ($sizeMB MB)" "SUCCESS"
-        
-        # Sign the executable if certificate is provided
-        if ($SigningCert) {
-            # Check for ARM64 system building x64 - fix ownership issue
-            $isARM64System = (Get-WmiObject -Class Win32_Processor | Select-Object -First 1).Architecture -eq 12
-            if ($isARM64System -and $Arch -eq "x64") {
-                Write-Log "ARM64 system detected - fixing x64 binary ownership for signing..." "INFO"
-                try {
-                    & takeown /f $executablePath | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Log "Fixed x64 binary ownership" "SUCCESS"
-                    }
-                } catch {
-                    Write-Log "Could not fix ownership, but continuing..." "WARN"
-                }
-            }
-            
-            if (Invoke-SignArtifact -Path $executablePath -Thumbprint $SigningCert.Thumbprint) {
-                Write-Log "Code signing completed for $Arch" "SUCCESS"
-            } else {
-                Write-Log "Code signing failed for $Arch" "ERROR"
-                return $false
-            }
-        } else {
-            Write-Log "Skipping code signing (no certificate)" "WARN"
-        }
-        
-        return $true
-        
     } catch {
-        Write-Log "Build failed for $Arch`: $($_.Exception.Message)" "ERROR"
-        return $false
+        Write-Log "Failed to download cimipkg: $($_.Exception.Message)" "ERROR"
     }
+
+    throw "cimipkg.exe not found. Install it or place it in the tools/ directory."
 }
 
-# Function to run basic tests
-function Test-Build {
-    param([string]$ExecutablePath)
-    
-    Write-Log "Testing build: $ExecutablePath" "INFO"
-    
-    if (-not (Test-Path $ExecutablePath)) {
-        Write-Log "Executable not found for testing: $ExecutablePath" "ERROR"
-        return $false
-    }
-    
+# --- Signing decision ---
+
+$autoDetectedCert = $null
+if (-not $Sign -and -not $NoSign) {
     try {
-        # Test version output
-        Write-Log "Testing --version command..." "INFO"
-        $versionOutput = & $ExecutablePath --version 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "Version test passed: $versionOutput" "SUCCESS"
+        $certInfo = Get-SigningCertThumbprint
+        if ($certInfo) {
+            $autoDetectedCert = $certInfo
+            Write-Log "Auto-detected certificate: $($certInfo.Subject) in $($certInfo.Store) store" "INFO"
+            $Sign = $true
+            if (-not $Thumbprint) { $Thumbprint = $certInfo.Thumbprint }
         } else {
-            Write-Log "Version test failed with exit code: $LASTEXITCODE" "WARN"
+            Write-Log "No code signing certificate found - binaries will be unsigned." "WARNING"
         }
-        
-        # Test help output  
-        Write-Log "Testing --help command..." "INFO"
-        $null = & $ExecutablePath --help 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "Help test passed" "SUCCESS"
-        } else {
-            Write-Log "Help test failed with exit code: $LASTEXITCODE" "WARN"
-        }
-        
-        return $true
-        
     } catch {
-        Write-Log "Testing failed: $($_.Exception.Message)" "ERROR"
-        return $false
+        Write-Log "Could not check for certificates: $_" "WARNING"
     }
 }
-
-# Main build process
-try {
-    $rootPath = $PSScriptRoot
-    Push-Location $rootPath
-    
-    # Prerequisites check
-    Write-Log "Checking prerequisites..." "INFO"
-    
-    if (-not (Test-Command "dotnet")) {
-        throw ".NET CLI not found. Please install .NET 9 SDK."
-    }
-    
-    $dotnetVersion = & dotnet --version
-    Write-Log "Using .NET version: $dotnetVersion" "INFO"
-    
-    # Handle signing certificate
-    $signingCert = $null
-    if ($Sign) {
-        Test-SignTool
-        $signingCert = Get-SigningCertificate -Thumbprint $Thumbprint
-        if (-not $signingCert) {
-            Write-Log "Code signing requested but no certificate available" "ERROR"
-            throw "Cannot proceed with signing - certificate not found"
-        }
-    }
-    
-    # Build for requested architectures
-    $buildResults = @()
-    
-    $architectures = switch ($Architecture) {
-        "x64"  { @("x64") }
-        "arm64" { @("arm64") }
-        "both" { @("x64", "arm64") }
-    }
-    
-    foreach ($arch in $architectures) {
-        Write-Log "" "INFO"
-        $success = Build-Architecture -Arch $arch -SigningCert $signingCert
-        $buildResults += @{
-            Architecture = $arch
-            Success = $success
-            Path = "publish\$arch\taskbarutil.exe"
-        }
-        
-        if ($Test -and $success) {
-            $execPath = Join-Path $rootPath "publish\$arch\taskbarutil.exe"
-            Test-Build -ExecutablePath $execPath
-        }
-    }
-    
-    # Build summary
-    Write-Log "" "INFO"
-    Write-Log "=== BUILD SUMMARY ===" "INFO"
-    
-    $successCount = 0
-    $signedCount = 0
-    foreach ($result in $buildResults) {
-        if ($result.Success) {
-            $successCount++
-            $fullPath = Join-Path $rootPath $result.Path
-            if (Test-Path $fullPath) {
-                $fileInfo = Get-Item $fullPath
-                $sizeMB = [math]::Round($fileInfo.Length / 1MB, 2)
-                
-                # Check if file is signed
-                $isSigned = $false
-                if ($signingCert) {
-                    try {
-                        $signature = Get-AuthenticodeSignature -FilePath $fullPath
-                        $isSigned = ($signature.Status -eq "Valid")
-                        if ($isSigned) { $signedCount++ }
-                    } catch {
-                        $isSigned = $false
-                    }
-                }
-                
-                $signStatus = if ($signingCert) { if ($isSigned) { " [SIGNED]" } else { " [UNSIGNED]" } } else { "" }
-                Write-Log "✅ $($result.Architecture): $($result.Path) ($sizeMB MB)$signStatus" "SUCCESS"
-            } else {
-                Write-Log "✅ $($result.Architecture): Built successfully" "SUCCESS"
-            }
-        } else {
-            Write-Log "❌ $($result.Architecture): Build failed" "ERROR"
-        }
-    }
-    
-    Write-Log "" "INFO"
-    Write-Log "Built $successCount of $($buildResults.Count) architectures successfully" "INFO"
-    
-    if ($signingCert) {
-        if ($signedCount -eq $successCount) {
-            Write-Log "All executables signed with certificate: $($signingCert.Subject)" "SUCCESS"
-        } else {
-            Write-Log "Signing completed for $signedCount of $successCount executables" "WARN"
-            Write-Log "Certificate: $($signingCert.Subject)" "INFO"
-        }
-    }
-    
-    if ($successCount -eq $buildResults.Count) {
-        Write-Log "All builds completed successfully!" "SUCCESS"
-        exit 0
-    } else {
-        Write-Log "Some builds failed" "ERROR"
-        exit 1
-    }
-    
-} catch {
-    Write-Log "Build process failed: $($_.Exception.Message)" "ERROR"
+if ($NoSign) { Write-Log "NoSign specified - skipping all signing." "INFO"; $Sign = $false }
+if ($Sign -and -not (Resolve-SignToolPath)) {
+    Write-Log "Signing requested but signtool.exe not found. Install Windows SDK." "ERROR"
     exit 1
-} finally {
-    Pop-Location
+}
+
+# --- Clean ---
+
+if ($Clean) {
+    Write-Log "Cleaning..." "INFO"
+    foreach ($dir in @($distDir, $releaseDir, "staging-*")) {
+        if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    }
+}
+
+# --- Build ---
+
+if ($Build) {
+    Write-Log "Building TaskbarUtil ($Configuration)..." "INFO"
+
+    if (-not (Get-Command "dotnet" -ErrorAction SilentlyContinue)) {
+        Write-Log ".NET SDK not found. Install from https://dotnet.microsoft.com/download" "ERROR"; exit 1
+    }
+
+    # Run tests first
+    if ($Test) {
+        Write-Log "Running tests..." "INFO"
+        & dotnet test (Join-Path $rootPath "tests\TaskbarUtil.Tests.csproj") --configuration $Configuration --verbosity minimal
+        if ($LASTEXITCODE -ne 0) { Write-Log "Tests failed" "ERROR"; exit 1 }
+        Write-Log "All tests passed" "SUCCESS"
+    }
+
+    $version = Get-Date -Format "yyyy.MM.dd.HHmm"
+
+    foreach ($rid in $Runtime) {
+        Write-Log "Publishing for $rid..." "INFO"
+
+        & dotnet publish $projectPath `
+            -c $Configuration -r $rid --self-contained `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=true `
+            -p:TrimMode=partial `
+            -p:Version=$version
+
+        if ($LASTEXITCODE -ne 0) { Write-Log "Failed to publish for $rid" "ERROR"; exit 1 }
+
+        $arch = if ($rid -match 'x64') { 'x64' } elseif ($rid -match 'arm64') { 'arm64' } else { $rid }
+        $archDir = Join-Path $distDir $arch
+        New-Item -ItemType Directory -Path $archDir -Force | Out-Null
+
+        $publishDir = Join-Path $rootPath "src\bin\$Configuration\net10.0-windows10.0.22621.0\$rid\publish"
+        $builtExe = Join-Path $publishDir "taskbarutil.exe"
+
+        if (-not (Test-Path $builtExe)) { Write-Log "taskbarutil.exe not found in publish output for $rid" "ERROR"; exit 1 }
+
+        $destPath = Join-Path $archDir "taskbarutil.exe"
+        Copy-Item $builtExe $destPath -Force
+        $filesToSign.Add($destPath)
+
+        $sizeMB = '{0:N2}' -f ((Get-Item $destPath).Length / 1MB)
+        Write-Log "Built: $arch\taskbarutil.exe ($sizeMB MB)" "SUCCESS"
+    }
+
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds 2
+}
+
+# --- Sign ---
+
+if ($Sign -and $filesToSign.Count -gt 0) {
+    Write-Log "Signing artifacts..." "INFO"
+    foreach ($file in $filesToSign | Sort-Object -Unique) {
+        Invoke-CodeSign -TargetFile $file -CertThumbprint $Thumbprint -CertName $CertificateName
+    }
+}
+
+# --- MSI Package (cimipkg) ---
+
+if ($Msi) {
+    $cimipkg = Ensure-Cimipkg
+    $version = Get-Date -Format "yyyy.MM.dd.HHmm"
+    New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+
+    foreach ($arch in @("x64", "arm64")) {
+        $exePath = Join-Path $distDir "$arch\taskbarutil.exe"
+        if (-not (Test-Path $exePath)) { Write-Log "Binary not found: $exePath - skipping MSI" "WARNING"; continue }
+
+        Write-Log "Building MSI for $arch..." "INFO"
+        $stagingDir = Join-Path $rootPath "staging-$arch"
+
+        New-Item -ItemType Directory -Path "$stagingDir\payload" -Force | Out-Null
+        New-Item -ItemType Directory -Path "$stagingDir\scripts" -Force | Out-Null
+
+        Copy-Item $exePath "$stagingDir\payload\" -Force
+
+        (Get-Content "build\pkg\build-info.yaml" -Raw) `
+            -replace '\{\{VERSION\}\}', $version `
+            -replace '\{\{ARCHITECTURE\}\}', $arch |
+            Set-Content "$stagingDir\build-info.yaml" -Encoding UTF8
+
+        (Get-Content "build\pkg\preinstall.ps1" -Raw) `
+            -replace '\{\{VERSION\}\}', $version |
+            Set-Content "$stagingDir\scripts\preinstall.ps1" -Encoding UTF8
+
+        (Get-Content "build\pkg\postinstall.ps1" -Raw) `
+            -replace '\{\{VERSION\}\}', $version |
+            Set-Content "$stagingDir\scripts\postinstall.ps1" -Encoding UTF8
+
+        & $cimipkg --verbose $stagingDir
+        if ($LASTEXITCODE -ne 0) { Write-Log "cimipkg MSI build failed for $arch" "ERROR"; exit 1 }
+
+        $msi = Get-ChildItem "$stagingDir\build\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($msi) {
+            $dest = Join-Path $releaseDir "TaskbarUtil-$arch-$version.msi"
+            Move-Item $msi.FullName $dest -Force
+            $sizeMB = '{0:N2}' -f ((Get-Item $dest).Length / 1MB)
+            Write-Log "MSI created: TaskbarUtil-$arch-$version.msi ($sizeMB MB)" "SUCCESS"
+
+            if ($Sign) {
+                Write-Log "Signing MSI: $(Split-Path $dest -Leaf)" "INFO"
+                Invoke-CodeSign -TargetFile $dest -CertThumbprint $Thumbprint -CertName $CertificateName
+            }
+        } else {
+            Write-Log "MSI output not found for $arch" "ERROR"; exit 1
+        }
+
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --- NuGet Package (cimipkg) ---
+
+if ($Nupkg) {
+    $cimipkg = Ensure-Cimipkg
+    $version = Get-Date -Format "yyyy.MM.dd.HHmm"
+    New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+
+    foreach ($arch in @("x64", "arm64")) {
+        $stagingDir = Join-Path $rootPath "staging-nupkg-$arch"
+        $exePath = Join-Path $distDir "$arch\taskbarutil.exe"
+        if (-not (Test-Path $exePath)) { Write-Log "Binary not found: $exePath - skipping NuGet" "WARNING"; continue }
+
+        # Rebuild staging for nupkg
+        New-Item -ItemType Directory -Path "$stagingDir\payload" -Force | Out-Null
+        New-Item -ItemType Directory -Path "$stagingDir\scripts" -Force | Out-Null
+        Copy-Item $exePath "$stagingDir\payload\" -Force
+
+        (Get-Content "build\pkg\build-info.yaml" -Raw) `
+            -replace '\{\{VERSION\}\}', $version `
+            -replace '\{\{ARCHITECTURE\}\}', $arch |
+            Set-Content "$stagingDir\build-info.yaml" -Encoding UTF8
+
+        Write-Log "Building NuGet package for $arch..." "INFO"
+        & $cimipkg --nupkg --verbose $stagingDir
+        if ($LASTEXITCODE -ne 0) { Write-Log "cimipkg NuGet build failed for $arch" "WARNING"; continue }
+
+        $nupkg = Get-ChildItem "$stagingDir\build\*.nupkg" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($nupkg) {
+            $dest = Join-Path $releaseDir "TaskbarUtil-$arch-$version.nupkg"
+            Move-Item $nupkg.FullName $dest -Force
+            Write-Log "NuGet package created: TaskbarUtil-$arch-$version.nupkg" "SUCCESS"
+        } else {
+            Write-Log "NuGet output not found for $arch, skipping" "WARNING"
+        }
+
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --- Zip standalone binaries ---
+
+New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+foreach ($arch in @("x64", "arm64")) {
+    $exePath = Join-Path $distDir "$arch\taskbarutil.exe"
+    if (Test-Path $exePath) {
+        $zipPath = Join-Path $releaseDir "taskbarutil-$arch.zip"
+        Compress-Archive -Path $exePath -DestinationPath $zipPath -Force
+        Write-Log "Created: taskbarutil-$arch.zip" "SUCCESS"
+    }
+}
+
+# --- Summary ---
+
+Write-Log "" "INFO"
+Write-Log "=== BUILD COMPLETE ===" "SUCCESS"
+if (Test-Path $releaseDir) {
+    Get-ChildItem $releaseDir | ForEach-Object {
+        $sizeMB = '{0:N2}' -f ($_.Length / 1MB)
+        Write-Log "  $($_.Name) ($sizeMB MB)" "INFO"
+    }
 }
