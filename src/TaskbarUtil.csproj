@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>false</UseWindowsForms>
+    <!-- RuntimeIdentifier is now specified via build command only -->
+    <AssemblyName>taskbarutil</AssemblyName>
+    <Product>TaskbarUtil</Product>
+    <Description>A command line utility for managing Windows taskbar pins</Description>
+    <Authors>WindowsAdmins</Authors>
+    <Copyright>Copyright © 2025 WindowsAdmins</Copyright>
+    <PackageProjectUrl>https://github.com/windowsadmins/taskbarutil</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/windowsadmins/taskbarutil</RepositoryUrl>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+  </ItemGroup>
+
+</Project>

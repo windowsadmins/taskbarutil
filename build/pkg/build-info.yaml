@@ -1,0 +1,9 @@
+product:
+  name: TaskbarUtil
+  version: {{VERSION}}
+  identifier: ca.ecuad.taskbarutil
+  developer: Windows Admins Open Source
+  description: Windows 11 taskbar pin management via local policy
+  architecture: {{ARCHITECTURE}}
+install_location: 'C:\Program Files\sbin'
+postinstall_action: script
