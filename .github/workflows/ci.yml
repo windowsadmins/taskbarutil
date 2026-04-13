@@ -202,7 +202,7 @@ jobs:
 
             Binaries and MSI packages are provided **unsigned**. For enterprise
             deployment, sign them with your organization's code signing certificate
-            before distribution to avoid AV/EDR false positives:
+            before distribution to avoid attack surface reduction rules and outright blocking by AV/EDR:
 
             ```powershell
             # Sign binary
