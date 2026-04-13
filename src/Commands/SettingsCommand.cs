@@ -7,15 +7,17 @@ public static class SettingsCommand
 {
     const string AdvancedKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
 
-    static readonly (string Name, string RegValue, string[] Options)[] Settings =
+    static readonly SettingDef[] Settings =
     [
-        ("search",   "SearchboxTaskbarMode", ["hidden", "icon", "icon-label", "box"]),
-        ("taskview", "ShowTaskViewButton",   ["off", "on"]),
-        ("widgets",  "TaskbarDa",            ["off", "on"]),
-        ("resume",   "ShowResumeButton",     ["off", "on"]),
-        ("copilot",  "ShowCopilotButton",    ["off", "on"]),
-        ("chat",     "TaskbarMn",            ["off", "on"]),
+        new("search",   "SearchboxTaskbarMode", ["hidden", "icon", "icon-label", "box"]),
+        new("taskview", "ShowTaskViewButton",   ["off", "on"],   "HideTaskViewButton", @"Software\Policies\Microsoft\Windows\Explorer"),
+        new("widgets",  "TaskbarDa",            ["off", "on"],   "DisableWidgetsBoard", @"SOFTWARE\Policies\Microsoft\Dsh"),
+        new("resume",   "ShowResumeButton",     ["off", "on"]),
+        new("copilot",  "ShowCopilotButton",    ["off", "on"],   "TurnOffWindowsCopilot", @"Software\Policies\Microsoft\Windows\WindowsCopilot"),
+        new("chat",     "TaskbarMn",            ["off", "on"],   "ChatIcon", @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"),
     ];
+
+    record SettingDef(string Name, string RegValue, string[] Options, string? PolicyValue = null, string? PolicyPath = null);
 
     public static Command Create()
     {
@@ -41,7 +43,7 @@ public static class SettingsCommand
             var setting = Settings.FirstOrDefault(s =>
                 s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-            if (setting.Name == null)
+            if (setting == null)
             {
                 Console.Error.WriteLine($"Unknown setting '{name}'.");
                 Console.Error.WriteLine($"Available: {string.Join(", ", Settings.Select(s => s.Name))}");
@@ -70,7 +72,7 @@ public static class SettingsCommand
             ShowOne(s);
     }
 
-    static void ShowOne((string Name, string RegValue, string[] Options) setting)
+    static void ShowOne(SettingDef setting)
     {
         var current = GetRegValue(setting.RegValue);
         var display = setting.Name == "search"
@@ -78,10 +80,43 @@ public static class SettingsCommand
             : (current == 0 ? "off" : "on");
 
         var pad = setting.Name.PadRight(10);
-        Console.WriteLine($"  {pad} {display,-12} ({string.Join("|", setting.Options)})");
+        var policyNote = GetPolicyNote(setting);
+
+        if (policyNote != null)
+            Console.WriteLine($"  {pad} {display,-12} (locked by policy: {policyNote})");
+        else
+            Console.WriteLine($"  {pad} {display,-12} ({string.Join("|", setting.Options)})");
     }
 
-    static void SetValue((string Name, string RegValue, string[] Options) setting, string value)
+    static string? GetPolicyNote(SettingDef setting)
+    {
+        if (setting.PolicyPath == null || setting.PolicyValue == null)
+            return null;
+
+        // Check HKLM
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(setting.PolicyPath);
+            var val = key?.GetValue(setting.PolicyValue);
+            if (val != null)
+                return $"HKLM\\{setting.PolicyPath}\\{setting.PolicyValue} = {val}";
+        }
+        catch { }
+
+        // Check HKCU policies
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(setting.PolicyPath);
+            var val = key?.GetValue(setting.PolicyValue);
+            if (val != null)
+                return $"HKCU\\{setting.PolicyPath}\\{setting.PolicyValue} = {val}";
+        }
+        catch { }
+
+        return null;
+    }
+
+    static void SetValue(SettingDef setting, string value)
     {
         int regVal;
 
