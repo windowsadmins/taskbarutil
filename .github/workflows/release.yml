@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v',''
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Restore
+        run: dotnet restore TaskbarUtil.sln
+
+      - name: Build binaries
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($rid in @("win-x64", "win-arm64")) {
+            dotnet publish src/TaskbarUtil.csproj `
+              -c Release -r $rid --self-contained `
+              -p:PublishSingleFile=true `
+              -p:PublishTrimmed=true `
+              -p:TrimMode=partial `
+              -p:Version=$version
+
+            $arch = if ($rid -eq "win-x64") { "x64" } else { "arm64" }
+            New-Item -ItemType Directory -Path "dist/$arch" -Force | Out-Null
+            Copy-Item "src/bin/Release/net10.0-windows10.0.22621.0/$rid/publish/taskbarutil.exe" "dist/$arch/taskbarutil.exe" -Force
+          }
+
+      - name: Download cimipkg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path tools -Force | Out-Null
+          gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir tools
+          Expand-Archive -Path tools/cimipkg-win-x64.zip -DestinationPath tools -Force
+
+      - name: Build MSI packages
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+
+          foreach ($arch in @("x64", "arm64")) {
+            $stagingDir = "staging-$arch"
+            New-Item -ItemType Directory -Path "$stagingDir/payload" -Force | Out-Null
+            New-Item -ItemType Directory -Path "$stagingDir/scripts" -Force | Out-Null
+            Copy-Item "dist/$arch/taskbarutil.exe" "$stagingDir/payload/" -Force
+
+            (Get-Content "build/pkg/build-info.yaml" -Raw) `
+              -replace '\{\{VERSION\}\}', $version `
+              -replace '\{\{ARCHITECTURE\}\}', $arch |
+              Set-Content "$stagingDir/build-info.yaml" -Encoding UTF8
+
+            (Get-Content "build/pkg/preinstall.ps1" -Raw) `
+              -replace '\{\{VERSION\}\}', $version |
+              Set-Content "$stagingDir/scripts/preinstall.ps1" -Encoding UTF8
+
+            (Get-Content "build/pkg/postinstall.ps1" -Raw) `
+              -replace '\{\{VERSION\}\}', $version |
+              Set-Content "$stagingDir/scripts/postinstall.ps1" -Encoding UTF8
+
+            & .\tools\cimipkg.exe --verbose $stagingDir
+            if ($LASTEXITCODE -ne 0) { throw "cimipkg MSI build failed for $arch" }
+
+            $msi = Get-ChildItem "$stagingDir/build/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($msi) {
+              Move-Item $msi.FullName "release/TaskbarUtil-$arch-$version.msi" -Force
+            } else {
+              throw "MSI output not found for $arch"
+            }
+          }
+
+      - name: Build NuGet packages
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($arch in @("x64", "arm64")) {
+            $stagingDir = "staging-$arch"
+            & .\tools\cimipkg.exe --nupkg --verbose $stagingDir
+            $nupkg = Get-ChildItem "$stagingDir/build/*.nupkg" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($nupkg) {
+              Move-Item $nupkg.FullName "release/TaskbarUtil-$arch-$version.nupkg" -Force
+            }
+          }
+
+      - name: Prepare release zips
+        shell: pwsh
+        run: |
+          foreach ($arch in @("x64", "arm64")) {
+            Compress-Archive -Path "dist/$arch/taskbarutil.exe" -DestinationPath "release/taskbarutil-$arch.zip" -Force
+          }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $dotnet = (dotnet --version).Trim()
+          $os = (Get-CimInstance Win32_OperatingSystem).Caption.Trim()
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $title = "TaskbarUtil $version"
+
+          $buildInfo = @"
+          ## Build info
+
+          Built with .NET SDK $dotnet on $os, via GitHub Actions: $runUrl. Provided **unsigned**.
+          "@
+
+          $signing = @"
+          ## Signing for enterprise deployment
+
+          ``````powershell
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" taskbarutil.exe
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" TaskbarUtil-x64-$version.msi
+          ``````
+
+          Built from commit ``$env:GITHUB_SHA``.
+          "@
+
+          $autoNotes = gh api -X POST "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name=$tag --jq .body
+          $notes = "$buildInfo`n`n$autoNotes`n`n$signing"
+
+          $artifacts = Get-ChildItem -Path release -File | ForEach-Object { $_.FullName }
+          if ($artifacts.Count -eq 0) { throw 'No artifacts to upload' }
+          gh release create $tag @artifacts --title $title --notes $notes
