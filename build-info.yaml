@@ -4,6 +4,6 @@ product:
   developer: Windows Admins Open Source
   identifier: com.windowsadmins.taskbarutil
   description: Windows taskbar apps pin management via local policy
-signing_certificate: ExampleOrgU Intune Windows Enterprise Certificate
+signing_certificate: ${SIGNING_CERT_CN}
 postinstall_action: none
 install_location: 'C:\Program Files\sbin'
