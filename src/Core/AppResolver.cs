@@ -71,58 +71,67 @@ public class AppResolver
 
     ResolvedApp? FindStartMenuShortcut(string displayName, string[]? aliases)
     {
-        var dirs = GetStartMenuDirs();
         var searchNames = new List<string> { displayName };
         if (aliases != null)
             searchNames.AddRange(aliases);
 
-        foreach (var dir in dirs)
-        {
-            if (!Directory.Exists(dir)) continue;
+        // Score every shortcut against every name we know the app by and take
+        // the best, rather than returning the first file that matched anything.
+        // Returning first is what pinned Adobe Media Encoder for Visual Studio
+        // Code: "Encoder" contained the "Code" alias and sorted earlier.
+        var best = RankStartMenu(name => searchNames.Max(s => ShortcutRanker.Score(name.Name, s, name.Target)))
+            .FirstOrDefault();
 
-            foreach (var lnk in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
-            {
-                var name = Path.GetFileNameWithoutExtension(lnk);
-                foreach (var search in searchNames)
-                {
-                    if (name.Equals(search, StringComparison.OrdinalIgnoreCase) ||
-                        name.Contains(search, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var linkPath = ToPortableLinkPath(lnk);
-                        var target = ResolveShortcutTarget(lnk);
-                        return new ResolvedApp(displayName, PinType.DesktopApp, linkPath, null, null, target, 95);
-                    }
-                }
-            }
-        }
+        if (best == null)
+            return null;
 
-        return null;
+        // Keep the caller's display name -- it asked for "Mozilla Firefox", not
+        // whatever the shortcut on this particular machine happens to be called.
+        return new ResolvedApp(displayName, PinType.DesktopApp, best.LinkPath, null, null, best.Target, best.Score);
     }
 
     List<ResolvedApp> SearchStartMenu(string query)
     {
-        var results = new List<ResolvedApp>();
-        var dirs = GetStartMenuDirs();
+        return RankStartMenu(c => ShortcutRanker.Score(c.Name, query, c.Target))
+            .Select(c => new ResolvedApp(c.Name, PinType.DesktopApp, c.LinkPath, null, null, c.Target, c.Score))
+            .ToList();
+    }
 
-        foreach (var dir in dirs)
+    record Candidate(string Name, string LinkPath, string? Target, int Score);
+
+    /// <summary>
+    /// Enumerates every Start Menu shortcut, scores it with the supplied
+    /// function, and returns the matches best-first. Enumeration order does not
+    /// influence the result -- the score and ShortcutRanker's tie-breaks
+    /// decide it.
+    /// </summary>
+    List<Candidate> RankStartMenu(Func<Candidate, int> score)
+    {
+        var candidates = new List<Candidate>();
+
+        foreach (var dir in GetStartMenuDirs())
         {
             if (!Directory.Exists(dir)) continue;
 
             foreach (var lnk in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
             {
                 var name = Path.GetFileNameWithoutExtension(lnk);
-                if (!name.Contains(query, StringComparison.OrdinalIgnoreCase))
+
+                // Cheap pre-filter, so the COM call that reads a shortcut's
+                // target only happens for shortcuts that could plausibly win.
+                // Scoring runs twice for survivors, which is far cheaper than
+                // opening every .lnk on the machine.
+                var withoutTarget = new Candidate(name, ToPortableLinkPath(lnk), null, 0);
+                if (score(withoutTarget) == ShortcutRanker.NoMatch)
                     continue;
 
                 var target = ResolveShortcutTarget(lnk);
-                var linkPath = ToPortableLinkPath(lnk);
-                int confidence = name.Equals(query, StringComparison.OrdinalIgnoreCase) ? 95 : 70;
-
-                results.Add(new ResolvedApp(name, PinType.DesktopApp, linkPath, null, null, target, confidence));
+                var candidate = withoutTarget with { Target = target };
+                candidates.Add(candidate with { Score = score(candidate) });
             }
         }
 
-        return results;
+        return ShortcutRanker.Rank(candidates, c => c.Score, c => c.Name).ToList();
     }
 
     List<ResolvedApp> SearchAppxPackages(string query)
