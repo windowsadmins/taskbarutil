@@ -157,6 +157,69 @@ public class ShortcutRankerTests
         Assert.True(app > doc, $"exe {app} should beat html {doc}");
     }
 
+    // --- Newest release wins ---
+
+    [Fact]
+    public void PrefersTheNewerYearWhenBothGenerationsAreInstalled()
+    {
+        // Apps that ship one shortcut per yearly release leave every installed
+        // generation behind. Both score the same and are the same length, so the
+        // ordinal tie-break used to hand back last year's.
+        Assert.Equal("Adobe Photoshop 2026", Best("Adobe Photoshop",
+            ("Adobe Photoshop 2024", @"C:\Program Files\Adobe\Adobe Photoshop 2024\Photoshop.exe"),
+            ("Adobe Photoshop 2026", @"C:\Program Files\Adobe\Adobe Photoshop 2026\Photoshop.exe")));
+    }
+
+    [Fact]
+    public void ComparesVersionPartsAsNumbersNotText()
+    {
+        // 17.1v1 beats 17.0v3, which an ordinal comparison gets backwards
+        // because "0" sorts before "1" at the second part.
+        Assert.Equal("Nuke 17.1v1", Best("Nuke",
+            ("Nuke 17.0v3", @"C:\Program Files\Nuke17.0v3\Nuke17.0.exe"),
+            ("Nuke 17.1v1", @"C:\Program Files\Nuke17.1v1\Nuke17.1.exe")));
+    }
+
+    [Fact]
+    public void DoubleDigitVersionBeatsSingleDigit()
+    {
+        // Text ordering puts "9" after "10"; numeric ordering does not.
+        Assert.Equal("Studio 10", Best("Studio",
+            ("Studio 10", @"C:\Program Files\Studio10\studio.exe"),
+            ("Studio 9", @"C:\Program Files\Studio9\studio.exe")));
+    }
+
+    [Fact]
+    public void UnversionedNameStillWinsOnLength()
+    {
+        // The version rule only applies when *both* names carry one. Treating
+        // "no version" as version zero would rank the ESR build above plain
+        // Firefox, undoing the shortest-name rule.
+        Assert.Equal("Firefox", Best("Firefox",
+            ("Firefox 115 ESR", @"C:\Program Files\Mozilla Firefox ESR\firefox.exe"),
+            ("Firefox", @"C:\Program Files\Mozilla Firefox\firefox.exe")));
+    }
+
+    [Fact]
+    public void VersionRuleDoesNotOutrankScore()
+    {
+        // An older primary launcher still beats a newer uninstaller: score is
+        // compared before the version.
+        Assert.Equal("ZBrush 2024", Best("ZBrush",
+            ("Uninstall ZBrush 2026", @"C:\Program Files\ZBrush 2026\Uninstall.exe"),
+            ("ZBrush 2024", @"C:\Program Files\ZBrush 2024\ZBrush.exe")));
+    }
+
+    [Fact]
+    public void TrailingDigitsInsideAWordAreNotAVersion()
+    {
+        // "Photoshop9" is one word, so there is no version to compare and the
+        // existing tie-breaks decide it.
+        Assert.Equal("Photoshop9", Best("Photoshop",
+            ("Photoshop9 Extended", @"C:\Program Files\Photoshop9\photoshop.exe"),
+            ("Photoshop9", @"C:\Program Files\Photoshop9\photoshop.exe")));
+    }
+
     [Fact]
     public void NoMatchIsDiscardedByRank()
     {
