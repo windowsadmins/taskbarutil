@@ -20,6 +20,18 @@ namespace TaskbarUtil.Core;
 /// Separately, matching was a bare case-insensitive substring test, so the
 /// "Code" alias of Visual Studio Code matched Adobe Media En-code-r and
 /// pinned an unrelated application.
+///
+/// One more shape, same root cause. Apps that ship a shortcut per release leave
+/// every installed generation behind:
+///
+///   &lt;app&gt; 2024.lnk                beat  &lt;app&gt; 2026.lnk
+///   &lt;app&gt; 17.0v3.lnk              beat  &lt;app&gt; 17.1v1.lnk
+///
+/// Equal score, equal length, so the ordinal tie-break decided it and picked
+/// last year's. This one is quieter than the rest: the shortcut it returns is
+/// real and launches fine, so nothing errors and nobody notices until they look
+/// at the version in the title bar. Versions now compare numerically, newest
+/// first, whenever both names carry one.
 /// </summary>
 public static class ShortcutRanker
 {
@@ -109,11 +121,112 @@ public static class ShortcutRanker
     /// </summary>
     public static IEnumerable<T> Rank<T>(IEnumerable<T> candidates, Func<T, int> score, Func<T, string> name)
     {
-        return candidates
-            .Where(c => score(c) != NoMatch)
-            .OrderByDescending(score)
-            .ThenBy(c => name(c).Length)
-            .ThenBy(name, StringComparer.OrdinalIgnoreCase);
+        var ranked = candidates.Where(c => score(c) != NoMatch).ToList();
+        ranked.Sort((a, b) => Compare(score(a), name(a), score(b), name(b)));
+        return ranked;
+    }
+
+    /// <summary>
+    /// Orders two candidates best-first: score, then the newer release when both
+    /// carry a version, then the shortest name, then ordinally so the result
+    /// never depends on enumeration order.
+    ///
+    /// This is a hand-written comparison rather than a chain of ThenBy because
+    /// the version rule is conditional on *both* names carrying one, which is
+    /// not expressible as a sort key. Making it unconditional -- treating "no
+    /// version" as version zero -- would rank "Firefox 115 ESR" above plain
+    /// "Firefox", which is the opposite of what the shortest-name rule is there
+    /// to do.
+    /// </summary>
+    static int Compare(int scoreA, string nameA, int scoreB, string nameB)
+    {
+        var byScore = scoreB.CompareTo(scoreA);
+        if (byScore != 0)
+            return byScore;
+
+        var versionA = TrailingVersion(nameA);
+        var versionB = TrailingVersion(nameB);
+        if (versionA is not null && versionB is not null)
+        {
+            var byVersion = CompareVersions(versionB, versionA);
+            if (byVersion != 0)
+                return byVersion;
+        }
+
+        var byLength = nameA.Length.CompareTo(nameB.Length);
+        if (byLength != 0)
+            return byLength;
+
+        return string.Compare(nameA, nameB, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The version or year a shortcut name ends with, as its numeric parts, or
+    /// null when it does not end with one.
+    ///
+    /// Apps that ship one Start Menu shortcut per yearly release leave every
+    /// installed generation behind, so a machine carrying two of them offered
+    /// two equally-scoring candidates of equal length and the ordinal tie-break
+    /// picked the *older* one -- "&lt;app&gt; 2024" sorts before "&lt;app&gt;
+    /// 2026". Nothing errored, because the shortcut it picked was real and
+    /// launched fine; it was just last year's.
+    ///
+    /// Accepts a dot or a "v" between parts, so both "22.0.368" and "17.1v1"
+    /// compare as numbers rather than text -- which also fixes 17.1v1 losing to
+    /// 17.0v3 on an ordinal comparison.
+    /// </summary>
+    static int[]? TrailingVersion(string name)
+    {
+        var end = name.Length;
+        while (end > 0 && char.IsWhiteSpace(name[end - 1]))
+            end--;
+
+        if (end == 0 || !char.IsDigit(name[end - 1]))
+            return null;
+
+        var start = end;
+        while (start > 0)
+        {
+            var c = name[start - 1];
+            if (char.IsDigit(c) || c == '.' || c == 'v' || c == 'V')
+                start--;
+            else
+                break;
+        }
+
+        // Must be a separate token, not the tail of a word like "Photoshop9".
+        if (start > 0 && !char.IsWhiteSpace(name[start - 1]))
+            return null;
+
+        var parts = name.Substring(start, end - start)
+                        .Split(new[] { '.', 'v', 'V' }, StringSplitOptions.RemoveEmptyEntries);
+
+        var numbers = new List<int>();
+        foreach (var part in parts)
+        {
+            if (!int.TryParse(part, out var value))
+                return null;
+            numbers.Add(value);
+        }
+
+        return numbers.Count > 0 ? numbers.ToArray() : null;
+    }
+
+    /// <summary>
+    /// Compares two version part lists numerically. A missing trailing part
+    /// counts as zero, so "22.0" and "22.0.0" are equal and "22.1" beats both.
+    /// </summary>
+    static int CompareVersions(int[] left, int[] right)
+    {
+        var length = Math.Max(left.Length, right.Length);
+        for (var i = 0; i < length; i++)
+        {
+            var a = i < left.Length ? left[i] : 0;
+            var b = i < right.Length ? right[i] : 0;
+            if (a != b)
+                return a.CompareTo(b);
+        }
+        return 0;
     }
 
     /// <summary>
