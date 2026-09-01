@@ -47,6 +47,7 @@ public static class AddCommand
                 if (resolved == null)
                 {
                     Console.Error.WriteLine($"Could not find '{app}'. Try 'taskbarutil find {app}' to search.");
+                    Log.Error($"add: could not resolve '{app}'");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -68,6 +69,7 @@ public static class AddCommand
             if (existing != null)
             {
                 Console.WriteLine($"'{pin.DisplayName}' is already in the layout config.");
+                Log.Info($"add: '{pin.DisplayName}' is already pinned; nothing changed");
                 return;
             }
 
@@ -83,6 +85,7 @@ public static class AddCommand
                 if (target == null)
                 {
                     Console.Error.WriteLine($"Cannot find '{before}' in layout config for --before.");
+                    Log.Error($"add: --before target '{before}' not found in layout config");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -94,6 +97,7 @@ public static class AddCommand
                 if (target == null)
                 {
                     Console.Error.WriteLine($"Cannot find '{after}' in layout config for --after.");
+                    Log.Error($"add: --after target '{after}' not found in layout config");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -101,6 +105,7 @@ public static class AddCommand
             }
 
             layout.AddPin(pin, idx);
+            var placed = layout.Pins.IndexOf(pin) + 1;
 
             if (dryRun)
             {
@@ -109,6 +114,7 @@ public static class AddCommand
                 Console.WriteLine($"  Identifier: {pin.GetXmlIdentifier()}");
                 if (position.HasValue)
                     Console.WriteLine($"  Position: {position.Value}");
+                Log.Debug($"add: dry run, would pin '{pin.DisplayName}' ({pin.Type} {pin.GetXmlIdentifier()}) at position {placed}");
                 return;
             }
 
@@ -116,6 +122,7 @@ public static class AddCommand
             EnvironmentInfo.EnsureConfigDirectory();
             var xml = LayoutXmlGenerator.Generate(layout);
             File.WriteAllText(EnvironmentInfo.ConfigFilePath, xml);
+            Log.Info($"add: pinned '{pin.DisplayName}' ({pin.Type} {pin.GetXmlIdentifier()}) at position {placed} in {EnvironmentInfo.ConfigFilePath}");
 
             Console.WriteLine($"Added '{pin.DisplayName}' to layout config.");
             Console.WriteLine($"Run 'taskbarutil apply' to deploy the configuration.");

@@ -27,6 +27,7 @@ public static class MoveCommand
             if (layout == null || layout.Pins.Count == 0)
             {
                 Console.Error.WriteLine("No layout config found.");
+                Log.Error($"move: no layout config at {EnvironmentInfo.ConfigFilePath}; cannot move '{app}'");
                 Environment.ExitCode = 1;
                 return;
             }
@@ -35,10 +36,12 @@ public static class MoveCommand
             if (pin == null)
             {
                 Console.Error.WriteLine($"'{app}' not found in layout config.");
+                Log.Error($"move: '{app}' not found in layout config");
                 Environment.ExitCode = 3;
                 return;
             }
 
+            var oldIndex = layout.Pins.IndexOf(pin);
             int newIndex;
             if (position.HasValue)
             {
@@ -50,6 +53,7 @@ public static class MoveCommand
                 if (target == null)
                 {
                     Console.Error.WriteLine($"Cannot find '{before}' in layout config for --before.");
+                    Log.Error($"move: --before target '{before}' not found in layout config");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -63,6 +67,7 @@ public static class MoveCommand
                 if (target == null)
                 {
                     Console.Error.WriteLine($"Cannot find '{after}' in layout config for --after.");
+                    Log.Error($"move: --after target '{after}' not found in layout config");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -72,6 +77,7 @@ public static class MoveCommand
             else
             {
                 Console.Error.WriteLine("Specify --position, --before, or --after.");
+                Log.Error($"move: no destination given for '{pin.DisplayName}'");
                 Environment.ExitCode = 1;
                 return;
             }
@@ -79,6 +85,7 @@ public static class MoveCommand
             if (dryRun)
             {
                 Console.WriteLine($"[dry-run] Would move '{pin.DisplayName}' to position {newIndex + 1}");
+                Log.Debug($"move: dry run, would move '{pin.DisplayName}' from position {oldIndex + 1} to {newIndex + 1}");
                 return;
             }
 
@@ -86,6 +93,7 @@ public static class MoveCommand
 
             var xml = LayoutXmlGenerator.Generate(layout);
             File.WriteAllText(EnvironmentInfo.ConfigFilePath, xml);
+            Log.Info($"move: moved '{pin.DisplayName}' from position {oldIndex + 1} to {newIndex + 1} in {EnvironmentInfo.ConfigFilePath}");
 
             Console.WriteLine($"Moved '{pin.DisplayName}' to position {newIndex + 1}.");
             Console.WriteLine($"Run 'taskbarutil apply' to deploy the configuration.");

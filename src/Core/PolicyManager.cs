@@ -48,6 +48,7 @@ public static class PolicyManager
         {
             if (verbose)
                 Console.Error.WriteLine("  [policy] Registry Policies path is locked (GPO-managed). Falling back to direct file copy.");
+            Log.Warn($"policy: HKCU\\{PolicyKeyPath} is not writable (GPO-managed); falling back to direct file copy");
         }
 
         // Fallback: copy XML directly to Shell directory
@@ -65,6 +66,7 @@ public static class PolicyManager
         }
         catch (Exception ex)
         {
+            Log.Error($"policy: could not write layout file {ShellLayoutPath}", ex);
             return new ApplyResult(ApplyMethod.DirectFileCopy, ShellLayoutPath, false,
                 $"Failed to write layout file: {ex.Message}");
         }
@@ -94,11 +96,13 @@ public static class PolicyManager
         {
             if (verbose)
                 Console.Error.WriteLine("  [policy] Could not access registry Policies path (GPO-managed). Skipping.");
+            Log.Warn($"policy: HKCU\\{PolicyKeyPath} is not writable (GPO-managed); registry cleanup skipped");
         }
         catch (Exception ex)
         {
             if (verbose)
                 Console.Error.WriteLine($"  [policy] Registry cleanup warning: {ex.Message}");
+            Log.Warn($"policy: registry cleanup failed: {ex.Message}");
         }
 
         // Remove the direct file copy if present
@@ -114,6 +118,7 @@ public static class PolicyManager
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Warning: Could not delete {ShellLayoutPath}: {ex.Message}");
+            Log.Warn($"policy: could not delete {ShellLayoutPath}: {ex.Message}");
         }
     }
 
@@ -206,6 +211,7 @@ public static class PolicyManager
             {
                 if (verbose)
                     Console.Error.WriteLine($"  [allhomes] Failed for {profile.UserName ?? profile.Sid}: {ex.Message}");
+                Log.Warn($"allhomes: failed for profile {profile.Sid}: {ex.Message}");
             }
         }
 
@@ -222,6 +228,7 @@ public static class PolicyManager
         {
             if (verbose)
                 Console.Error.WriteLine($"  [allhomes] Could not deploy to Default profile: {ex.Message}");
+            Log.Warn($"allhomes: could not deploy layout to the Default profile: {ex.Message}");
         }
 
         return applied;

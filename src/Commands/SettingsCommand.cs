@@ -1,5 +1,6 @@
 using System.CommandLine;
 using Microsoft.Win32;
+using TaskbarUtil.Core;
 
 namespace TaskbarUtil.Commands;
 
@@ -145,6 +146,7 @@ public static class SettingsCommand
         {
             Console.Error.WriteLine($"Invalid value '{value}' for {setting.Name}.");
             Console.Error.WriteLine($"Options: {string.Join(", ", setting.Options)}");
+            Log.Error($"settings: invalid value '{value}' for {setting.Name}");
             Environment.ExitCode = 1;
             return;
         }
@@ -155,16 +157,19 @@ public static class SettingsCommand
             if (key == null)
             {
                 Console.Error.WriteLine($"Registry key not found: {AdvancedKeyPath}");
+                Log.Error($"settings: registry key not found: HKCU\\{AdvancedKeyPath}");
                 Environment.ExitCode = 1;
                 return;
             }
             key.SetValue(setting.RegValue, regVal, RegistryValueKind.DWord);
             var display = setting.Name == "search" ? MapSearchValue(regVal) : (regVal == 0 ? "off" : "on");
             Console.WriteLine($"{setting.Name} = {display}");
+            Log.Info($"settings: {setting.Name} = {display} (HKCU\\{AdvancedKeyPath}\\{setting.RegValue} = {regVal})");
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Failed to set {setting.Name}: {ex.Message}");
+            Log.Error($"settings: failed to set {setting.Name}", ex);
             Environment.ExitCode = 1;
         }
     }
