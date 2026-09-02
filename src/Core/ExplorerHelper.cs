@@ -61,6 +61,7 @@ public static class ExplorerHelper
 
         if (verbose)
             Console.Error.WriteLine("  [explorer] Warning: Taskbar did not reappear within 15 seconds");
+        Log.Warn("explorer: taskbar did not reappear within 15 seconds of restarting explorer");
     }
 
     static void DeleteStart2Bin(bool verbose)

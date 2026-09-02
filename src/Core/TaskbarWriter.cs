@@ -44,6 +44,7 @@ public static class TaskbarWriter
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"  Warning: Could not delete {lnk}: {ex.Message}");
+                    Log.Warn($"taskbar: could not delete pinned shortcut {lnk}: {ex.Message}");
                 }
             }
         }
@@ -73,9 +74,11 @@ public static class TaskbarWriter
         catch (Exception ex)
         {
             Console.Error.WriteLine($"  Warning: Could not clear Taskband registry: {ex.Message}");
+            Log.Error($"taskbar: could not clear Taskband registry: {ex.Message}");
             return false;
         }
 
+        Log.Info($"taskbar: wrote {layout.Pins.Count} pinned shortcut(s) to {pinnedDir} and cleared Taskband registry");
         return true;
     }
 
@@ -143,6 +146,7 @@ public static class TaskbarWriter
         catch (Exception ex)
         {
             Console.Error.WriteLine($"  Warning: Could not restore Taskband: {ex.Message}");
+            Log.Error($"taskbar: could not restore Taskband registry: {ex.Message}");
             return false;
         }
 
@@ -228,6 +232,7 @@ public static class TaskbarWriter
         catch (Exception ex)
         {
             Console.Error.WriteLine($"  Warning: Could not create shortcut for {pin.DisplayName}: {ex.Message}");
+            Log.Warn($"taskbar: could not create shortcut for '{pin.DisplayName}' at {lnkPath}: {ex.Message}");
         }
     }
 

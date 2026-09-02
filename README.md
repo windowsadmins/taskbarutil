@@ -123,6 +123,10 @@ Three types of pins are supported in the XML:
 - **Desktop apps via ID**: `DesktopApplicationID` for system apps like File Explorer
 - **UWP/MSIX apps**: `AppUserModelID` for Store/modern apps
 
+## Logging
+
+Every pin, unpin, move, replace, apply, reset and settings change is appended to `C:\ProgramData\ManagedUtilities\logs\taskbarutil.log` with its target and outcome, along with any error. When that directory is not writable (a non-elevated user) the log falls back to `%LOCALAPPDATA%\TaskbarUtil\logs\taskbarutil.log`. Lines are `[yyyy-MM-dd HH:mm:ss] LEVEL message` in local time; the file rolls at 5 MB to `taskbarutil.log.1` through `.5`, newest first. Console output is unchanged and is not the log.
+
 ## License
 
 Apache-2.0

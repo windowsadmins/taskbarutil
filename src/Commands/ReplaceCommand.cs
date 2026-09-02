@@ -27,6 +27,7 @@ public static class ReplaceCommand
             if (layout == null || layout.Pins.Count == 0)
             {
                 Console.Error.WriteLine("No layout config found.");
+                Log.Error($"replace: no layout config at {EnvironmentInfo.ConfigFilePath}; cannot replace '{oldApp}'");
                 Environment.ExitCode = 1;
                 return;
             }
@@ -35,6 +36,7 @@ public static class ReplaceCommand
             if (existing == null)
             {
                 Console.Error.WriteLine($"'{oldApp}' not found in layout config.");
+                Log.Error($"replace: '{oldApp}' not found in layout config");
                 Environment.ExitCode = 3;
                 return;
             }
@@ -55,6 +57,7 @@ public static class ReplaceCommand
                 if (resolved == null)
                 {
                     Console.Error.WriteLine($"Could not find '{newApp}'. Try 'taskbarutil find {newApp}' to search.");
+                    Log.Error($"replace: could not resolve replacement '{newApp}' for '{existing.DisplayName}'");
                     Environment.ExitCode = 3;
                     return;
                 }
@@ -64,6 +67,7 @@ public static class ReplaceCommand
             if (dryRun)
             {
                 Console.WriteLine($"[dry-run] Would replace '{existing.DisplayName}' with '{replacement.DisplayName}'");
+                Log.Debug($"replace: dry run, would replace '{existing.DisplayName}' with '{replacement.DisplayName}' ({replacement.Type} {replacement.GetXmlIdentifier()})");
                 return;
             }
 
@@ -71,6 +75,7 @@ public static class ReplaceCommand
 
             var xml = LayoutXmlGenerator.Generate(layout);
             File.WriteAllText(EnvironmentInfo.ConfigFilePath, xml);
+            Log.Info($"replace: replaced '{existing.DisplayName}' with '{replacement.DisplayName}' ({replacement.Type} {replacement.GetXmlIdentifier()}) in {EnvironmentInfo.ConfigFilePath}");
 
             Console.WriteLine($"Replaced '{existing.DisplayName}' with '{replacement.DisplayName}'.");
             Console.WriteLine($"Run 'taskbarutil apply' to deploy the configuration.");

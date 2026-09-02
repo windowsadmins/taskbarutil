@@ -1,5 +1,8 @@
 using System.CommandLine;
+using System.CommandLine.Builder;
+using System.CommandLine.Parsing;
 using TaskbarUtil.Commands;
+using TaskbarUtil.Core;
 
 namespace TaskbarUtil;
 
@@ -33,6 +36,30 @@ class Program
         rootCommand.AddCommand(ApplyCommand.Create(verboseOption, dryRunOption));
         rootCommand.AddCommand(ResetCommand.Create(verboseOption, dryRunOption));
 
-        return await rootCommand.InvokeAsync(args);
+        // The stock pipeline (what RootCommand.InvokeAsync would build) with its
+        // exception handler swapped for one that records the crash in the file log
+        // before printing it exactly as the default handler does.
+        var parser = new CommandLineBuilder(rootCommand)
+            .UseVersionOption()
+            .UseHelp()
+            .UseEnvironmentVariableDirective()
+            .UseParseDirective()
+            .UseSuggestDirective()
+            .RegisterWithDotnetSuggest()
+            .UseTypoCorrections()
+            .UseParseErrorReporting()
+            .UseExceptionHandler((exception, context) =>
+            {
+                Log.Error($"Unhandled exception running 'taskbarutil {string.Join(" ", args)}'", exception);
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.Error.Write("Unhandled exception: ");
+                Console.Error.WriteLine(exception.ToString());
+                Console.ResetColor();
+                context.ExitCode = 1;
+            })
+            .CancelOnProcessTermination()
+            .Build();
+
+        return await parser.InvokeAsync(args);
     }
 }
