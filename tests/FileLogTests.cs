@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ManagedUtilities;
+using System.Text.Json;
 using Xunit;
 
 namespace TaskbarUtil.Tests;
@@ -133,5 +134,43 @@ public class FileLogTests
         var exception = Record.Exception(() => log.Error("this must be swallowed"));
 
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void EveryEntryIsAlsoWrittenToTheEventStream()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "taskbarutil-events-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            var day = DateTime.Now.ToString(FileLog.DayFormat);
+            var log = FileLog.ForTool("taskbarutil", Path.Combine(root, "TaskbarUtil"));
+            // ForTool resolves the real shared or per-user location, so assert the shape
+            // rather than the root: the entries land in a day directory beside events.jsonl.
+            Assert.Equal(day, Path.GetFileName(Path.GetDirectoryName(log.FilePath)));
+            Assert.Equal("taskbarutil.log", Path.GetFileName(log.FilePath));
+
+            log.Info("pinned 'Edge'");
+            var events = Path.Combine(log.DirectoryPath, FileLog.EventsFileName);
+            Assert.True(File.Exists(events));
+            var last = File.ReadAllLines(events)[^1];
+            using var document = JsonDocument.Parse(last);
+            Assert.Equal("INFO", document.RootElement.GetProperty("level").GetString());
+            Assert.Equal("taskbarutil", document.RootElement.GetProperty("tool").GetString());
+            Assert.Equal("pinned 'Edge'", document.RootElement.GetProperty("message").GetString());
+            Assert.Equal(Environment.ProcessId.ToString(), document.RootElement.GetProperty("pid").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void ResolvePathIsDayNested()
+    {
+        var stamp = new DateTime(2026, 9, 3, 4, 11, 7);
+        var path = FileLog.ResolvePath("taskbarutil", "TaskbarUtil", stamp);
+        Assert.Equal("taskbarutil.log", Path.GetFileName(path));
+        Assert.Equal("2026-09-03", Path.GetFileName(Path.GetDirectoryName(path)));
     }
 }
