@@ -154,6 +154,25 @@ public static class PolicyManager
         return File.Exists(ShellLayoutPath);
     }
 
+    /// <summary>
+    /// True when the registry policy points StartLayoutFile at a layout without
+    /// locking it (apply --seed): the pins were a starting point, not enforced.
+    /// </summary>
+    public static bool IsSeeded()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(PolicyKeyPath);
+            if (key == null) return false;
+            var locked = key.GetValue("LockedStartLayout") is int i && i == 1;
+            return !locked && key.GetValue("StartLayoutFile") is string path && path.Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static string? GetAppliedLayoutPath()
     {
         try

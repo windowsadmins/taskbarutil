@@ -29,15 +29,20 @@ public static class ListCommand
                 }
             }
 
-            // Show policy-applied layout if active
-            if (PolicyManager.IsApplied())
+            // Show policy-applied layout if active. A seeded layout (apply --seed)
+            // is only a starting point, so the user's own pins may differ from it.
+            var policyApplied = PolicyManager.IsApplied();
+            var policySeeded = policyApplied && PolicyManager.IsSeeded();
+            if (policyApplied)
             {
                 var layoutPath = PolicyManager.GetAppliedLayoutPath()
                     ?? EnvironmentInfo.ConfigFilePath;
                 var layout = LayoutXmlParser.TryLoadFromFile(layoutPath);
 
                 Console.WriteLine();
-                Console.WriteLine("# Policy layout (active)");
+                Console.WriteLine(policySeeded
+                    ? "# Policy layout (seeded, editable)"
+                    : "# Policy layout (active)");
                 Console.WriteLine();
 
                 if (layout != null && layout.Pins.Count > 0)
@@ -55,7 +60,7 @@ public static class ListCommand
 
             Console.WriteLine();
             var total = items.Count;
-            if (PolicyManager.IsApplied())
+            if (policyApplied && !policySeeded)
             {
                 var layout = LayoutXmlParser.TryLoadFromFile(
                     PolicyManager.GetAppliedLayoutPath() ?? EnvironmentInfo.ConfigFilePath);
