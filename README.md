@@ -82,6 +82,20 @@ taskbarutil add "Microsoft.Windows.Explorer" --app-id
 taskbarutil add "Chrome" --dry-run
 ```
 
+### Apply Options
+
+By default `apply` locks the layout (`LockedStartLayout = 1`), so users cannot rearrange, pin or unpin anything afterwards. Pass `--seed` to set the same pins as a starting point instead: it does everything `apply` does, but writes `LockedStartLayout = 0`, leaving the taskbar editable. Use the default to enforce a layout, and `--seed` to hand users a sensible starting layout they are free to change.
+
+```powershell
+taskbarutil apply --seed
+```
+
+`--allhomes` applies to every signed-in user profile and the Default profile, and combines with `--seed`. `--no-restart` skips the explorer restart, so the layout takes effect at the next sign-in.
+
+```powershell
+taskbarutil apply --allhomes --seed
+```
+
 ## Requirements
 
 - Windows 11
@@ -107,7 +121,7 @@ TaskbarUtil stores its config at `%LocalAppData%\TaskbarUtil\LayoutModification.
 | Key | Value | Purpose |
 |-----|-------|---------|
 | `HKCU\...\Explorer\StartLayoutFile` | Path to XML | Points to the layout config |
-| `HKCU\...\Explorer\LockedStartLayout` | `1` | Activates the layout policy |
+| `HKCU\...\Explorer\LockedStartLayout` | `1`, or `0` with `--seed` | `1` locks the layout; `0` seeds it and leaves it editable |
 
 The XML must include `Version="1"` on the `LayoutModificationTemplate` root element -- without it, Windows silently ignores the entire file.
 
