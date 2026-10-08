@@ -27,19 +27,27 @@ public static class PolicyManager
     static readonly string ShellLayoutPath =
         Path.Combine(ShellDirectory, "LayoutModification.xml");
 
-    public static ApplyResult Apply(string xmlFilePath, bool verbose = false)
+    /// <summary>
+    /// Apply the layout to the current user. With <paramref name="seed"/> the
+    /// layout is written with LockedStartLayout = 0, so the pins are a starting
+    /// point the user can still rearrange, pin and unpin; otherwise the layout
+    /// is locked (LockedStartLayout = 1).
+    /// </summary>
+    public static ApplyResult Apply(string xmlFilePath, bool verbose = false, bool seed = false)
     {
+        var locked = seed ? 0 : 1;
+
         // Try registry policy first
         try
         {
             using var key = Registry.CurrentUser.CreateSubKey(PolicyKeyPath);
             key.SetValue("StartLayoutFile", xmlFilePath, RegistryValueKind.ExpandString);
-            key.SetValue("LockedStartLayout", 1, RegistryValueKind.DWord);
+            key.SetValue("LockedStartLayout", locked, RegistryValueKind.DWord);
 
             if (verbose)
             {
                 Console.Error.WriteLine($"  [policy] Set HKCU\\{PolicyKeyPath}\\StartLayoutFile = {xmlFilePath}");
-                Console.Error.WriteLine($"  [policy] Set HKCU\\{PolicyKeyPath}\\LockedStartLayout = 1");
+                Console.Error.WriteLine($"  [policy] Set HKCU\\{PolicyKeyPath}\\LockedStartLayout = {locked}");
             }
 
             return new ApplyResult(ApplyMethod.RegistryPolicy, PolicyKeyPath, true);
@@ -133,6 +141,11 @@ public static class PolicyManager
                 var val = key.GetValue("LockedStartLayout");
                 if (val is int i && i == 1)
                     return true;
+
+                // A seeded layout (apply --seed) leaves LockedStartLayout = 0
+                // but still points StartLayoutFile at the config.
+                if (key.GetValue("StartLayoutFile") is string path && path.Length > 0)
+                    return true;
             }
         }
         catch { }
@@ -158,10 +171,13 @@ public static class PolicyManager
     /// Apply the taskbar layout to all user profiles on the machine.
     /// Copies XML to a shared ProgramData location, then sets policy keys
     /// in each user's HKU hive and clears their caches.
-    /// Requires elevation (admin/SYSTEM).
+    /// Requires elevation (admin/SYSTEM). With <paramref name="seed"/> each
+    /// profile gets LockedStartLayout = 0 instead of 1, leaving the pins editable.
     /// </summary>
-    public static int ApplyAllHomes(string xmlFilePath, bool verbose = false)
+    public static int ApplyAllHomes(string xmlFilePath, bool verbose = false, bool seed = false)
     {
+        var locked = seed ? 0 : 1;
+
         // Copy XML to shared location so all users reference the same file
         Directory.CreateDirectory(SharedXmlDir);
         File.Copy(xmlFilePath, SharedXmlPath, overwrite: true);
@@ -186,7 +202,7 @@ public static class PolicyManager
             {
                 using var hku = Registry.Users.CreateSubKey($@"{profile.Sid}\{PolicyKeyPath}");
                 hku.SetValue("StartLayoutFile", SharedXmlPath, RegistryValueKind.ExpandString);
-                hku.SetValue("LockedStartLayout", 1, RegistryValueKind.DWord);
+                hku.SetValue("LockedStartLayout", locked, RegistryValueKind.DWord);
 
                 // Clear start2.bin cache
                 var start2 = Path.Combine(profile.ProfilePath,
