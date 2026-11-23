@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.CommandLine.Invocation;
 using TaskbarUtil.Core;
 using TaskbarUtil.Models;
 
@@ -15,6 +16,7 @@ public static class AddCommand
         var afterOption = new Option<string?>("--after", "Insert after this app");
         var uwpOption = new Option<bool>("--uwp", "Treat <app> as a UWP AppUserModelID");
         var appIdOption = new Option<bool>("--app-id", "Treat <app> as a DesktopApplicationID");
+        var ifInstalledOption = new Option<bool>("--if-installed", "Succeed without a pin when <app> is not installed");
 
         var command = new Command("add", "Add an app to the taskbar layout config")
         {
@@ -23,11 +25,23 @@ public static class AddCommand
             beforeOption,
             afterOption,
             uwpOption,
-            appIdOption
+            appIdOption,
+            ifInstalledOption
         };
 
-        command.SetHandler((app, position, before, after, uwp, appId, verbose, dryRun) =>
+        command.SetHandler((InvocationContext context) =>
         {
+            var parsed = context.ParseResult;
+            var app = parsed.GetValueForArgument(appArg);
+            var position = parsed.GetValueForOption(positionOption);
+            var before = parsed.GetValueForOption(beforeOption);
+            var after = parsed.GetValueForOption(afterOption);
+            var uwp = parsed.GetValueForOption(uwpOption);
+            var appId = parsed.GetValueForOption(appIdOption);
+            var ifInstalled = parsed.GetValueForOption(ifInstalledOption);
+            var verbose = parsed.GetValueForOption(verboseOption);
+            var dryRun = parsed.GetValueForOption(dryRunOption);
+
             TaskbarPin pin;
 
             if (uwp)
@@ -43,6 +57,12 @@ public static class AddCommand
                 // Resolve the app name
                 var resolver = new AppResolver(verbose);
                 var resolved = resolver.Resolve(app);
+
+                if (resolved == null && ifInstalled)
+                {
+                    Log.Info($"add: '{app}' is not installed; skipped");
+                    return;
+                }
 
                 if (resolved == null)
                 {
@@ -127,7 +147,7 @@ public static class AddCommand
             Console.WriteLine($"Added '{pin.DisplayName}' to layout config.");
             Console.WriteLine($"Run 'taskbarutil apply' to deploy the configuration.");
 
-        }, appArg, positionOption, beforeOption, afterOption, uwpOption, appIdOption, verboseOption, dryRunOption);
+        });
 
         return command;
     }
